@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="hr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cijene HR</title>
+  <meta name="description" content="Usporedba cijena proizvoda u trgovinama u Hrvatskoj">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/vendor/chart.umd.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap top-inner">
+      <a href="#/" class="logo">Cijene<span>HR</span></a>
+      <form id="search-form" class="search" role="search">
+        <input id="q" type="search" placeholder="Proizvod ili barkod (npr. mlijeko, 3858882210041)"
+               autocomplete="off" aria-label="Pretraga">
+        <button type="submit">Traži</button>
+      </form>
+      <select id="city" aria-label="Grad">
+        <option value="">Svi gradovi</option>
+      </select>
+    </div>
+  </header>
+
+  <main class="wrap" id="view" aria-live="polite"></main>
+
+  <footer class="wrap foot">
+    Podaci iz službenih cjenika trgovaca (NN 101/2026). ·
+    <a href="#/status">Stanje preuzimanja</a> · <a href="/docs">API</a>
+  </footer>
+</body>
+</html>

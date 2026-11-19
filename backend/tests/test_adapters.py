@@ -1,0 +1,109 @@
+"""Testovi adaptera na primjercima datoteka (tests/fixtures/<trgovac>/)."""
+from datetime import date
+from decimal import Decimal
+
+import httpx
+import pytest
+
+from app.adapters import FormatChanged, all_adapters, default_adapters, get_adapter
+from app.adapters.base import RawFile, unpack
+
+
+def load(fixtures, chain):
+    adapter = get_adapter(chain)()
+    files = []
+    for p in sorted((fixtures / chain).iterdir()):
+        files.extend(adapter.prepare(p.name, p.read_bytes()))
+    return [sp for f in files for sp in adapter.parse(f)]
+
+
+def test_registry_discovers_all_adapter_files():
+    assert {"konzum", "lidl", "plodine", "cijenedev"} <= set(all_adapters())
+    assert "cijenedev" not in default_adapters()
+
+
+def test_konzum(fixtures):
+    stores = {sp.store.code: sp for sp in load(fixtures, "konzum")}
+    zg = stores["0204"]
+    assert (zg.store.address, zg.store.postcode, zg.store.city, zg.store.name) == \
+        ("Put Gajeva 2", "10000", "Zagreb", "Supermarket")
+    assert stores["0811"].store.city == "Split"
+    assert zg.encoding == "utf-8" and len(zg.rows) == 6 and not zg.warnings
+    nut = next(r for r in zg.rows if r.code == "204411")
+    assert nut.regular_price == Decimal("4.99")
+    assert nut.special_price == Decimal("3.99")
+    assert nut.lowest_30d == Decimal("4.49") and nut.anchor_price == Decimal("4.79")
+    assert next(r for r in zg.rows if r.code == "600011").name.startswith("ČOKOLADA")
+
+
+def test_lidl_zip_cp1250(fixtures):
+    stores = {sp.store.code: sp for sp in load(fixtures, "lidl")}
+    assert set(stores) == {"265", "102"}
+    pr = stores["265"]
+    assert (pr.store.address, pr.store.postcode, pr.store.city) == \
+        ("Ulica Franje Glada 13", "40323", "Prelog")
+    assert stores["102"].store.address == "Zagrebačka Cesta 204"
+    assert pr.encoding == "cp1250"
+    milk = pr.rows[0]
+    assert milk.name == "Svježe mlijeko 2.8% m.m." and milk.regular_price == Decimal("1.19")
+    assert ";" in milk.barcode
+    assert len(pr.rows) == 4 and len(pr.warnings) == 1   # čokolada bez cijene
+
+
+def test_plodine(fixtures):
+    stores = {sp.store.code: sp for sp in load(fixtures, "plodine")}
+    j = stores["064"]
+    assert (j.store.address, j.store.postcode, j.store.city, j.store.name) == \
+        ("Ulica Franje Tudjmana 4", "10450", "Jastrebarsko", "Supermarket")
+    assert stores["015"].store.address == "Slavonska Avenija 11a"
+    nut = next(r for r in j.rows if r.code == "12002")
+    assert (nut.regular_price, nut.special_price, nut.unit_price) == \
+        (Decimal("4.89"), Decimal("3.99"), Decimal("12.23"))
+
+
+def test_cijenedev_multi_chain(fixtures):
+    sps = load(fixtures, "cijenedev")
+    assert [(sp.chain, sp.store.code, len(sp.rows)) for sp in sps] == [("spar", "S1", 2)]
+    cola = sps[0].rows[1]
+    assert cola.special_price == Decimal("1.39") and cola.lowest_30d == Decimal("1.59")
+
+
+def test_broken_format_raises(fixtures):
+    p = next((fixtures / "broken").iterdir())
+    with pytest.raises(FormatChanged):
+        list(get_adapter("konzum")().parse(RawFile(p.name, p.read_bytes())))
+
+
+# --- discover() uz lažni HTTP ------------------------------------------------ #
+
+def mock_client(pages: dict[str, str]) -> httpx.Client:
+    def handler(req: httpx.Request):
+        key = str(req.url)
+        for prefix, body in pages.items():
+            if key.startswith(prefix):
+                return httpx.Response(200, text=body)
+        return httpx.Response(200, text="<html></html>")
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_konzum_discover_paginates():
+    page1 = ('<a href="/cjenici/download?title=SUPERMARKET%2CA%2C0001.CSV">x</a>'
+             '<a href="/cjenici/download?title=SUPERMARKET%2CB%2C0002.CSV&amp;format=csv">y</a>')
+    page2 = '<a href="/cjenici/download?title=SUPERMARKET%2CC%2C0003.CSV">z</a>'
+    c = mock_client({
+        "https://www.konzum.hr/cjenici?date=2026-11-19&page=1": page1,
+        "https://www.konzum.hr/cjenici?date=2026-11-19&page=2": page2,
+    })
+    urls = get_adapter("konzum")(c).discover(date(2026, 11, 19))
+    assert len(urls) == 3 and urls[1].endswith("&format=csv")
+
+
+@pytest.mark.parametrize("chain,url", [
+    ("lidl", "https://tvrtka.lidl.hr/cijene"),
+    ("plodine", "https://www.plodine.hr/info-o-cijenama"),
+])
+def test_zip_discover_picks_date(chain, url):
+    html = ('<a href="/files/Popis_cijena_18_11_2026.zip">a</a>'
+            '<a href="https://cdn.example/x/cjenici_19_11_2026_08_00.zip">b</a>')
+    urls = get_adapter(chain)(mock_client({url: html})).discover(date(2026, 11, 19))
+    assert urls == ["https://cdn.example/x/cjenici_19_11_2026_08_00.zip"]

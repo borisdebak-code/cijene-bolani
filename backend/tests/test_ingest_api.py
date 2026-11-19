@@ -1,0 +1,171 @@
+"""Ingest + API na pravoj PostgreSQL bazi."""
+from __future__ import annotations
+
+from datetime import date, timedelta
+from decimal import Decimal
+
+import pytest
+from sqlalchemy import text
+
+from app.adapters.base import RawFile, unpack
+
+DAY = date.today() - timedelta(days=1)
+
+
+def raw_files(fixtures, chain) -> list[RawFile]:
+    return [f for p in sorted((fixtures / chain).iterdir()) for f in unpack(p.name, p.read_bytes())]
+
+
+@pytest.fixture()
+def loaded(db_engine, fixtures):
+    from app.db import SessionLocal
+    from app.services.ingest import run_adapter
+
+    results = {c: run_adapter(SessionLocal, c, DAY, files=raw_files(fixtures, c))
+               for c in ("konzum", "lidl", "plodine")}
+    return results
+
+
+@pytest.fixture()
+def client(loaded):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as c:
+        yield c
+
+
+def q(engine, sql, **p):
+    with engine.connect() as c:
+        return c.execute(text(sql), p).all()
+
+
+def product_id(engine, ean):
+    return q(engine, "SELECT id FROM product WHERE ean = :e", e=ean)[0][0]
+
+
+MLIJEKO, NUTELLA, KRUH = "3858882210041", "8000500310687", "3859991001230"
+
+
+def test_runs_ok(loaded, db_engine):
+    assert {c: r["status"] for c, r in loaded.items()} == \
+        {"konzum": "ok", "lidl": "ok", "plodine": "ok"}
+    assert loaded["konzum"]["stores"] == 2 and loaded["lidl"]["rows_skipped"] == 2
+
+
+def test_matching(loaded, db_engine):
+    # isti EAN kod sva tri trgovca -> jedan proizvod
+    chains = q(db_engine, """SELECT c.code FROM chain_product cp JOIN chain c ON c.id = cp.chain_id
+                             JOIN product p ON p.id = cp.product_id WHERE p.ean = :e ORDER BY 1""",
+               e=MLIJEKO)
+    assert [r[0] for r in chains] == ["konzum", "lidl", "plodine"]
+    # Plodine kruh nema EAN -> fuzzy spojen s Konzumovim (naziv + 500 g)
+    m = q(db_engine, """SELECT cp.match_method, p.ean FROM chain_product cp
+                        JOIN chain c ON c.id = cp.chain_id JOIN product p ON p.id = cp.product_id
+                        WHERE c.code = 'plodine' AND cp.code = '12004'""")
+    assert m == [("fuzzy", KRUH)]
+    # banane: interni kodovi, ali isti naziv i 1 kg -> spojene po nazivu
+    n = q(db_engine, """SELECT count(DISTINCT cp.product_id) FROM chain_product cp
+                        WHERE cp.name ILIKE 'banane'""")
+    assert n[0][0] == 1
+
+
+def test_idempotent_same_day(loaded, db_engine, fixtures):
+    from app.db import SessionLocal
+    from app.services.ingest import run_adapter
+
+    before = q(db_engine, "SELECT count(*) FROM price")[0][0]
+    run_adapter(SessionLocal, "konzum", DAY, files=raw_files(fixtures, "konzum"))
+    assert q(db_engine, "SELECT count(*) FROM price")[0][0] == before
+
+
+def test_history_intervals(loaded, db_engine, fixtures):
+    """Ista cijena -> produži interval; nova cijena -> novi red, stari ostaje."""
+    from app.db import SessionLocal
+    from app.services.ingest import run_adapter
+
+    day2 = DAY + timedelta(days=1)
+    files = raw_files(fixtures, "konzum")
+    zg = next(f for f in files if "ZAGREB" in f.name)
+    changed = RawFile(zg.name, zg.data.replace(b'"1,35","1,35"', b'"1,19","1,19"'))
+    run_adapter(SessionLocal, "konzum", day2, files=[changed])
+
+    rows = q(db_engine, """
+        SELECT p.valid_from, p.last_seen, p.regular_price, p.is_current
+        FROM price p JOIN chain_product cp ON cp.id = p.chain_product_id
+        JOIN store s ON s.id = p.store_id JOIN chain c ON c.id = cp.chain_id
+        WHERE c.code = 'konzum' AND s.code = '0204' AND cp.code = :code ORDER BY p.id""",
+             code="100231")
+    assert rows == [(DAY, DAY, Decimal("1.35"), False), (day2, day2, Decimal("1.19"), True)]
+    cola = q(db_engine, """
+        SELECT p.valid_from, p.last_seen FROM price p JOIN chain_product cp
+        ON cp.id = p.chain_product_id JOIN store s ON s.id = p.store_id
+        WHERE cp.code = '300100' AND s.code = '0204'""")
+    assert cola == [(DAY, day2)]
+
+
+def test_broken_file_logged(db_engine, fixtures):
+    from app.db import SessionLocal
+    from app.services.ingest import run_adapter
+
+    files = raw_files(fixtures, "konzum") + raw_files(fixtures, "broken")
+    r = run_adapter(SessionLocal, "konzum", DAY, files=files)
+    assert r["status"] == "partial" and r["files_failed"] == 1
+    errs = q(db_engine, "SELECT kind, file FROM ingest_error WHERE run_id = :r AND kind <> 'row'",
+             r=r["run_id"])
+    assert errs[0][0] == "format_changed" and errs[0][1].startswith("BROKEN")
+
+
+def test_download_failure_logged(db_engine):
+    from app.adapters import AdapterError
+    from app.adapters.lidl import LidlAdapter
+    from app.db import SessionLocal
+    from app.services.ingest import run_adapter
+
+    class Offline(LidlAdapter):
+        def discover(self, day):
+            raise AdapterError("nema cjenika")
+
+    r = run_adapter(SessionLocal, "lidl", DAY, adapter=Offline())
+    assert r["status"] == "failed" and "nema cjenika" in r["error"]
+
+
+# --- API ------------------------------------------------------------------- #
+
+def test_api_search_by_name_and_barcode(client):
+    res = client.get("/api/search", params={"q": "svjeze mlijeko"}).json()
+    assert res[0]["ean"] == MLIJEKO and res[0]["chains"] == 3
+    assert Decimal(str(res[0]["min_price"])) == Decimal("1.15")
+    res = client.get("/api/search", params={"q": NUTELLA}).json()
+    assert len(res) == 1 and res[0]["on_sale"] is True
+
+
+def test_api_prices_sorted_and_city_filter(client, db_engine):
+    pid = product_id(db_engine, NUTELLA)
+    data = client.get(f"/api/products/{pid}/prices").json()
+    prices = [s["price"] for s in data["stores"]]
+    assert prices == sorted(prices)
+    assert [c["chain"] for c in data["chains"]] == ["konzum", "plodine", "lidl"]
+    assert data["chains"][0]["min_price"] == 3.99 and data["chains"][0]["is_deal"]
+
+    zg = client.get(f"/api/products/{pid}/prices", params={"city": "Zagreb"}).json()
+    assert {s["city"] for s in zg["stores"]} == {"Zagreb"}
+    assert len(zg["stores"]) == 3
+
+
+def test_api_history(client, db_engine):
+    pid = product_id(db_engine, MLIJEKO)
+    series = client.get(f"/api/products/{pid}/history", params={"days": 30}).json()
+    by_chain = {s["chain"]: s["points"] for s in series}
+    assert set(by_chain) == {"konzum", "lidl", "plodine"}
+    assert by_chain["lidl"][-1]["min"] == 1.15
+
+
+def test_api_status_and_meta(client):
+    st = client.get("/api/status").json()
+    by = {a["adapter"]: a for a in st["adapters"]}
+    assert by["konzum"]["last_run"]["status"] == "ok"
+    cities = {c["city"] for c in client.get("/api/cities").json()}
+    assert {"Zagreb", "Split", "Prelog", "Jastrebarsko"} <= cities
+    assert client.get("/").status_code == 200

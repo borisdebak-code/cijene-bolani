@@ -1,0 +1,123 @@
+# Cijene HR
+
+Usporedba cijena proizvoda u trgovinama u Hrvatskoj. Podaci dolaze iz **službenih
+dnevnih cjenika** (CSV/XML) koje trgovci moraju objavljivati (Odluka NN 101/2026,
+ranije NN 75/2025). HTML stranice proizvoda se ne scrapaju.
+
+**MVP:** Konzum, Lidl, Plodine (+ opcionalno cijene.dev arhiva) · pretraga po nazivu
+ili barkodu · usporedba po trgovcima/poslovnicama s filtrom po gradu · graf povijesti
+cijene · stranica "Stanje preuzimanja" po adapteru.
+
+## Pokretanje
+
+```bash
+cp .env.example .env          # promijeni POSTGRES_PASSWORD
+docker compose up -d --build
+```
+
+- web: http://localhost:8000 · API dokumentacija: http://localhost:8000/docs
+- worker preuzima cjenike svaki dan u **08:30 (Europe/Zagreb)** (`INGEST_AT`)
+
+```bash
+docker compose exec worker python -m app.worker once                     # odmah, svi trgovci
+docker compose exec worker python -m app.worker once --chains lidl --date 2026-11-18
+docker compose exec worker python -m app.worker once --chains cijenedev  # brzi početak iz arhive
+docker compose exec worker python -m app.worker load plodine /data/raw/cjenik.zip
+docker compose exec worker python -m app.worker list
+docker compose exec api python /srv/scripts/seed_demo.py --days 60        # demo podaci (bez mreže)
+docker compose exec api pytest -q                                         # testovi
+```
+
+
+## Arhitektura
+
+```
+backend/app/
+  adapters/            ← jedan trgovac = jedna datoteka
+    base.py            Adapter: discover(day) → download(url) → parse(file)
+    csvutil.py         encoding (UTF-8/BOM/Windows-1250), delimiter, decimalni zarez,
+                       mapiranje zaglavlja po ključnim riječima
+    konzum.py lidl.py plodine.py cijenedev.py
+  normalize.py         EAN (checksum, UPC→EAN-13, odbacuje interne 2xx kodove),
+                       količina → g/ml/kom, tekst za pretragu
+  services/ingest.py   COPY u staging tablicu → chain_product → product → intervali cijena
+  services/matching.py spajanje: EAN, pa fuzzy (pg_trgm + rapidfuzz) uz istu količinu i marku
+  api/routes.py        /api/search, /api/products/{id}[/prices|/history], /api/cities, /api/status
+  worker.py            APScheduler (dnevno 08:30) + CLI
+frontend/              statični responzivni web (vanilla JS, Chart.js lokalno)
+```
+
+### Model podataka
+
+| tablica | sadržaj |
+|---|---|
+| `chain` | trgovac, `last_day` = datum zadnjeg cjenika |
+| `store` | poslovnica: šifra, tip, adresa, poštanski broj, grad |
+| `product` | kanonski proizvod (EAN, naziv, marka, količina, jedinica, kategorija) |
+| `chain_product` | artikl kod trgovca (njegova šifra) → `product_id`, `match_method` = ean/fuzzy/new |
+| `price` | MPC, cijena/JM, akcijska cijena, najniža 30 d, sidrena; **interval** `valid_from`–`last_seen` |
+| `ingest_run`, `ingest_error` | log po trgovcu/danu i po datoteci |
+
+**Povijest se ne prepisuje.** Ako je cijena ista kao jučer, produžuje se `last_seen`;
+ako se promijenila, stari red se zatvara (`is_current=false`), a dodaje se novi. Ponovno
+pokretanje za isti dan ne mijenja ništa. Tako je baza 20–50× manja nego s jednim redom po
+danu × poslovnici × proizvodu (samo Konzum je ~10 M takvih redova dnevno).
+
+### Kad trgovac promijeni format
+
+- Stupci se mapiraju po ključnim riječima (`naziv`, `maloprodajn`, `posebn`, `najniz`,
+  `sidren`, `barkod`…), pa sitne promjene (velika/mala slova, `_`, dijakritika, redoslijed) ne smetaju.
+- Ako nedostaju obavezni stupci → `FormatChanged`, zapis u `ingest_error` s cijelim zaglavljem.
+- Ako je broj redaka pao ispod 50 % prošlog uspješnog preuzimanja → status `partial` (`row_drop`).
+- Greška jednog trgovca/datoteke nikad ne zaustavlja ostale.
+- Sve je vidljivo na `/#/status` i `GET /api/status`, i u logovima s prefiksom `[konzum]`, `[lidl]`…
+
+### Dodavanje trgovca
+
+Nova datoteka `backend/app/adapters/<trgovac>.py`:
+
+```python
+class SparAdapter(Adapter):
+    code = "spar"
+    name = "Spar"
+
+    def discover(self, day):          # URL-ovi cjenika za taj dan
+        ...
+    @staticmethod
+    def store_from_filename(name):    # poslovnica iz imena datoteke
+        ...
+    def parse(self, raw):
+        rows, warnings, enc = parse_price_csv(raw.data)
+        yield StorePrices(self.code, self.store_from_filename(raw.name), rows, raw.name, enc, warnings)
+```
+
+Registar ga pronalazi automatski. Dodaj primjerak datoteke u `tests/fixtures/<trgovac>/` i test.
+Za XML cjenike (npr. neki trgovci) dovoljno je u `parse()` umjesto `parse_price_csv` koristiti XML parser
+i vraćati iste `PriceRow` objekte.
+
+## Testovi
+
+```bash
+cd backend && pip install -r requirements-dev.txt
+TEST_DATABASE_URL=postgresql+psycopg://user:pass@localhost/cijene_test pytest -q
+```
+
+- `test_parsing.py` – decimalni brojevi, encoding, zaglavlja svih trgovaca, EAN, količine
+- `test_adapters.py` – parsiranje fixturea, imena datoteka → poslovnice, `discover()` uz lažni HTTP
+- `test_ingest_api.py` – spajanje proizvoda, intervali povijesti, idempotentnost, logiranje grešaka, API
+- `test_real_samples.py` – stvarne datoteke trgovaca (vidi dolje)
+
+> **Napomena o fixtureima:** datoteke u `tests/fixtures/` izrađene su prema formatu stvarnih cjenika
+> (zaglavlja, imena datoteka, encoding, delimiteri), ali **nisu preuzete** od trgovaca jer razvojno
+> okruženje nije imalo pristup njihovim stranicama. Na mreži s pristupom pokreni
+> `python scripts/fetch_samples.py` – spremit će po 2 stvarne datoteke po trgovcu u
+> `tests/fixtures/<trgovac>/real/`, a `test_real_samples.py` ih automatski testira.
+> Također provjeri URL-ove u `discover()` metodama – stranice trgovaca se mijenjaju.
+
+## Sljedeće iteracije
+
+1. Ostali trgovci (Kaufland, Spar/Interspar, Tommy, Studenac, Eurospin, KTC, NTL, Ribola, Metro, DM, Boso, Trgovina Krk, Žabac)
+2. "Trenutne akcije" po trgovcu i kategoriji (podaci već postoje: `special_price`, `lowest_30d`, prethodni interval)
+3. Praćenje proizvoda + obavijesti (email / web push) kad krene akcija ili cijena padne ispod praga
+4. Košarica – najjeftiniji dućan za listu proizvoda
+5. Particioniranje tablice `price` po mjesecu, Alembic migracije, ručno potvrđivanje fuzzy spajanja
