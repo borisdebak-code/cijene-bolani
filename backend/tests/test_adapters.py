@@ -18,7 +18,7 @@ def load(fixtures, chain):
 
 
 def test_registry_discovers_all_adapter_files():
-    assert {"konzum", "lidl", "plodine", "cijenedev"} <= set(all_adapters())
+    assert {"konzum", "lidl", "plodine", "kaufland", "spar", "cijenedev"} <= set(all_adapters())
     assert "cijenedev" not in default_adapters()
 
 
@@ -107,3 +107,53 @@ def test_zip_discover_picks_date(chain, url):
             '<a href="https://cdn.example/x/cjenici_19_11_2026_08_00.zip">b</a>')
     urls = get_adapter(chain)(mock_client({url: html})).discover(date(2026, 11, 19))
     assert urls == ["https://cdn.example/x/cjenici_19_11_2026_08_00.zip"]
+
+
+def test_kaufland_tab_and_short_headers(fixtures):
+    stores = {sp.store.code: sp for sp in load(fixtures, "kaufland")}
+    vg = stores["4630"]
+    assert (vg.store.city, vg.store.address, vg.store.name) == \
+        ("Velika Gorica", "Zagrebacka Ulica 44", "Hipermarket")
+    assert stores["4100"].store.city == "Zagreb"
+    nut = next(r for r in vg.rows if r.code == "00445566")
+    assert (nut.regular_price, nut.special_price, nut.unit_price, nut.lowest_30d) == \
+        (Decimal("4.69"), Decimal("3.79"), Decimal("11.73"), Decimal("4.29"))
+    assert (nut.quantity, nut.unit) == ("0,4", "kg") and not vg.warnings
+
+
+def test_spar_and_interspar(fixtures):
+    sps = {sp.store.code: sp for sp in load(fixtures, "spar")}
+    vg, zg = sps["0034"], sps["0102"]
+    assert (vg.chain, vg.store.city, vg.store.address) == \
+        ("interspar", "Velika Gorica", "Zagrebacka Ulica 1")
+    assert (zg.chain, zg.store.city, zg.store.address) == ("spar", "Zagreb", "Ilica 250")
+    assert vg.encoding == "cp1250"
+    cola = next(r for r in vg.rows if r.code == "301177")
+    assert (cola.regular_price, cola.special_price) == (Decimal("1.65"), Decimal("1.29"))
+
+
+def test_spar_discover_json():
+    import json
+
+    body = json.dumps({"files": [
+        {"name": "a.csv", "URL": "https://www.spar.hr/datoteke_cjenici/a.csv"},
+        {"name": "b.csv", "URL": "https://www.spar.hr/datoteke_cjenici/b.csv"}]})
+    c = mock_client({"https://www.spar.hr/datoteke_cjenici/Cjenik20261119.json": body})
+    assert get_adapter("spar")(c).discover(date(2026, 11, 19)) == [
+        "https://www.spar.hr/datoteke_cjenici/a.csv", "https://www.spar.hr/datoteke_cjenici/b.csv"]
+
+
+def test_kaufland_discover_via_asset_json():
+    import json
+
+    page = '<div data-props="{&quot;settingsUrl&quot;:&quot;/popis-mpc.assetSearch.id=assetList_1.json&quot;}">'
+    assets = json.dumps([
+        {"label": "Hipermarket_Velika_Gorica_X_4630_19112026_7-30.csv",
+         "path": "/files/Hipermarket_Velika_Gorica_X_4630_19112026_7-30.csv"},
+        {"label": "stari", "path": "/files/Hipermarket_Zagreb_X_4100_18112026_7-30.csv"}])
+    c = mock_client({
+        "https://www.kaufland.hr/popis-mpc.assetSearch": assets,
+        "https://www.kaufland.hr/akcije-novosti/popis-mpc.html": page,
+    })
+    assert get_adapter("kaufland")(c).discover(date(2026, 11, 19)) == [
+        "https://www.kaufland.hr/files/Hipermarket_Velika_Gorica_X_4630_19112026_7-30.csv"]

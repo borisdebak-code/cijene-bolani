@@ -99,7 +99,8 @@ _HEADER_RULES: list[tuple[str, list[str], list[str]]] = [
     ("unit_price", ["cijena", "jedinic"], []),
     ("unit_price", ["cijena", "jm"], []),
     ("unit_price", ["cijena", "kg"], []),
-    ("regular_price", ["maloprodajn"], []),
+    ("unit_price", ["cijena", "jed", "mj"], []),        # Kaufland: "cijena jed.mj.(EUR)"
+    ("regular_price", ["maloprod"], []),                # "maloprodajna" i "maloprod."
     ("regular_price", ["mpc"], []),
     ("regular_price", ["cijena"], []),
     ("unit", ["jedinic", "mjer"], []),

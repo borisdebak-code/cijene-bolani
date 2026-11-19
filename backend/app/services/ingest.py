@@ -22,6 +22,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ..adapters import Adapter, AdapterError, FormatChanged, RawFile, StorePrices, get_adapter
+from ..geo import normalize_city
 from ..normalize import match_name, normalize_ean, parse_quantity, search_text
 from . import matching
 
@@ -86,7 +87,7 @@ def ensure_store(session: Session, chain_id: int, sp: StorePrices) -> int:
             """
         ),
         {"chain": chain_id, "code": s.code, "name": s.name, "address": s.address,
-         "postcode": s.postcode, "city": s.city},
+         "postcode": s.postcode, "city": normalize_city(s.city, s.postcode)},
     ).scalar_one()
 
 

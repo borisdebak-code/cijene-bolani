@@ -4,7 +4,7 @@ Usporedba cijena proizvoda u trgovinama u Hrvatskoj. Podaci dolaze iz **služben
 dnevnih cjenika** (CSV/XML) koje trgovci moraju objavljivati (Odluka NN 101/2026,
 ranije NN 75/2025). HTML stranice proizvoda se ne scrapaju.
 
-**MVP:** Konzum, Lidl, Plodine (+ opcionalno cijene.dev arhiva) · pretraga po nazivu
+**Trgovci:** Konzum, Lidl, Plodine, Kaufland, Spar i Interspar (+ opcionalno cijene.dev arhiva) · pretraga po nazivu
 ili barkodu · usporedba po trgovcima/poslovnicama s filtrom po gradu · graf povijesti
 cijene · stranica "Stanje preuzimanja" po adapteru.
 
@@ -37,7 +37,9 @@ backend/app/
     base.py            Adapter: discover(day) → download(url) → parse(file)
     csvutil.py         encoding (UTF-8/BOM/Windows-1250), delimiter, decimalni zarez,
                        mapiranje zaglavlja po ključnim riječima
-    konzum.py lidl.py plodine.py cijenedev.py
+    konzum.py lidl.py plodine.py kaufland.py spar.py cijenedev.py
+                       (spar.py puni dva trgovca: `spar` i `interspar`)
+  geo.py               gradovi: poštanski broj → grad, kratice (V.GORICA → Velika Gorica)
   normalize.py         EAN (checksum, UPC→EAN-13, odbacuje interne 2xx kodove),
                        količina → g/ml/kom, tekst za pretragu
   services/ingest.py   COPY u staging tablicu → chain_product → product → intervali cijena
@@ -71,6 +73,13 @@ danu × poslovnici × proizvodu (samo Konzum je ~10 M takvih redova dnevno).
 - Ako je broj redaka pao ispod 50 % prošlog uspješnog preuzimanja → status `partial` (`row_drop`).
 - Greška jednog trgovca/datoteke nikad ne zaustavlja ostale.
 - Sve je vidljivo na `/#/status` i `GET /api/status`, i u logovima s prefiksom `[konzum]`, `[lidl]`…
+
+### Gradovi
+
+Popis gradova u aplikaciji puni se iz poslovnica, pa grad (npr. Velika Gorica) postaje
+dostupan čim neki trgovac ima poslovnicu u njemu. Da bi filtar radio, isti grad mora biti
+zapisan isto kod svih trgovaca: `app/geo.py` prvo gleda poštanski broj (10410 → Velika Gorica),
+zatim poznate nazive i kratice. Novi grad dodaje se jednim retkom u `POSTCODE_CITY`.
 
 ### Dodavanje trgovca
 
@@ -116,7 +125,7 @@ TEST_DATABASE_URL=postgresql+psycopg://user:pass@localhost/cijene_test pytest -q
 
 ## Sljedeće iteracije
 
-1. Ostali trgovci (Kaufland, Spar/Interspar, Tommy, Studenac, Eurospin, KTC, NTL, Ribola, Metro, DM, Boso, Trgovina Krk, Žabac)
+1. Ostali trgovci (Tommy, Studenac, Eurospin, KTC, NTL, Ribola, Metro, DM, Boso, Trgovina Krk, Žabac)
 2. "Trenutne akcije" po trgovcu i kategoriji (podaci već postoje: `special_price`, `lowest_30d`, prethodni interval)
 3. Praćenje proizvoda + obavijesti (email / web push) kad krene akcija ili cijena padne ispod praga
 4. Košarica – najjeftiniji dućan za listu proizvoda

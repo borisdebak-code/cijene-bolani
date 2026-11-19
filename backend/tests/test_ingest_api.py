@@ -22,7 +22,7 @@ def loaded(db_engine, fixtures):
     from app.services.ingest import run_adapter
 
     results = {c: run_adapter(SessionLocal, c, DAY, files=raw_files(fixtures, c))
-               for c in ("konzum", "lidl", "plodine")}
+               for c in ("konzum", "lidl", "plodine", "kaufland", "spar")}
     return results
 
 
@@ -49,9 +49,9 @@ MLIJEKO, NUTELLA, KRUH = "3858882210041", "8000500310687", "3859991001230"
 
 
 def test_runs_ok(loaded, db_engine):
-    assert {c: r["status"] for c, r in loaded.items()} == \
-        {"konzum": "ok", "lidl": "ok", "plodine": "ok"}
-    assert loaded["konzum"]["stores"] == 2 and loaded["lidl"]["rows_skipped"] == 2
+    assert {r["status"] for r in loaded.values()} == {"ok"}
+    assert loaded["konzum"]["stores"] == 3 and loaded["lidl"]["rows_skipped"] == 2
+    assert loaded["kaufland"]["stores"] == 2 and loaded["spar"]["stores"] == 2
 
 
 def test_matching(loaded, db_engine):
@@ -59,12 +59,12 @@ def test_matching(loaded, db_engine):
     chains = q(db_engine, """SELECT c.code FROM chain_product cp JOIN chain c ON c.id = cp.chain_id
                              JOIN product p ON p.id = cp.product_id WHERE p.ean = :e ORDER BY 1""",
                e=MLIJEKO)
-    assert [r[0] for r in chains] == ["konzum", "lidl", "plodine"]
+    assert [r[0] for r in chains] == ["interspar", "kaufland", "konzum", "lidl", "plodine", "spar"]
     # Plodine kruh nema EAN -> fuzzy spojen s Konzumovim (naziv + 500 g)
     m = q(db_engine, """SELECT cp.match_method, p.ean FROM chain_product cp
                         JOIN chain c ON c.id = cp.chain_id JOIN product p ON p.id = cp.product_id
-                        WHERE c.code = 'plodine' AND cp.code = '12004'""")
-    assert m == [("fuzzy", KRUH)]
+                        WHERE (c.code, cp.code) IN (('plodine', '12004'), ('kaufland', '00990011'))""")
+    assert m == [("fuzzy", KRUH), ("fuzzy", KRUH)]
     # banane: interni kodovi, ali isti naziv i 1 kg -> spojene po nazivu
     n = q(db_engine, """SELECT count(DISTINCT cp.product_id) FROM chain_product cp
                         WHERE cp.name ILIKE 'banane'""")
@@ -135,7 +135,7 @@ def test_download_failure_logged(db_engine):
 
 def test_api_search_by_name_and_barcode(client):
     res = client.get("/api/search", params={"q": "svjeze mlijeko"}).json()
-    assert res[0]["ean"] == MLIJEKO and res[0]["chains"] == 3
+    assert res[0]["ean"] == MLIJEKO and res[0]["chains"] == 6
     assert Decimal(str(res[0]["min_price"])) == Decimal("1.15")
     res = client.get("/api/search", params={"q": NUTELLA}).json()
     assert len(res) == 1 and res[0]["on_sale"] is True
@@ -146,26 +146,38 @@ def test_api_prices_sorted_and_city_filter(client, db_engine):
     data = client.get(f"/api/products/{pid}/prices").json()
     prices = [s["price"] for s in data["stores"]]
     assert prices == sorted(prices)
-    assert [c["chain"] for c in data["chains"]] == ["konzum", "plodine", "lidl"]
-    assert data["chains"][0]["min_price"] == 3.99 and data["chains"][0]["is_deal"]
+    assert [c["chain"] for c in data["chains"]] == \
+        ["kaufland", "konzum", "plodine", "lidl", "interspar", "spar"]
+    assert data["chains"][0]["min_price"] == 3.79 and data["chains"][0]["is_deal"]
 
     zg = client.get(f"/api/products/{pid}/prices", params={"city": "Zagreb"}).json()
     assert {s["city"] for s in zg["stores"]} == {"Zagreb"}
-    assert len(zg["stores"]) == 3
+    assert len(zg["stores"]) == 5
+
+
+def test_api_velika_gorica(client, db_engine):
+    """Konzum (poštanski broj 10410), Kaufland i Interspar (grad iz imena
+    datoteke) moraju završiti pod istim gradom."""
+    pid = product_id(db_engine, NUTELLA)
+    vg = client.get(f"/api/products/{pid}/prices", params={"city": "Velika Gorica"}).json()
+    assert {s["chain"] for s in vg["stores"]} == {"konzum", "kaufland", "interspar"}
+    assert {s["city"] for s in vg["stores"]} == {"Velika Gorica"}
+    cities = {c["city"]: c["stores"] for c in client.get("/api/cities").json()}
+    assert cities["Velika Gorica"] == 3
 
 
 def test_api_history(client, db_engine):
     pid = product_id(db_engine, MLIJEKO)
     series = client.get(f"/api/products/{pid}/history", params={"days": 30}).json()
     by_chain = {s["chain"]: s["points"] for s in series}
-    assert set(by_chain) == {"konzum", "lidl", "plodine"}
+    assert set(by_chain) == {"konzum", "lidl", "plodine", "kaufland", "spar", "interspar"}
     assert by_chain["lidl"][-1]["min"] == 1.15
 
 
 def test_api_status_and_meta(client):
     st = client.get("/api/status").json()
     by = {a["adapter"]: a for a in st["adapters"]}
-    assert by["konzum"]["last_run"]["status"] == "ok"
+    assert all(by[c]["last_run"]["status"] == "ok" for c in ("konzum", "kaufland", "spar"))
     cities = {c["city"] for c in client.get("/api/cities").json()}
-    assert {"Zagreb", "Split", "Prelog", "Jastrebarsko"} <= cities
+    assert {"Zagreb", "Split", "Prelog", "Jastrebarsko", "Velika Gorica"} <= cities
     assert client.get("/").status_code == 200

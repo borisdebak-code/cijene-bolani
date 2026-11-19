@@ -27,10 +27,10 @@ rnd = random.Random(42)
 price_re = re.compile(rb"(?<![\d.,])(\d{1,2})([.,])(\d{2})(?![\d.,])")
 
 
-def wiggle(data: bytes, day_idx: int, enc: str) -> bytes:
+def wiggle(data: bytes, day_idx: int, enc: str, chain: str) -> bytes:
     # svakih ~10 dana cijene se malo pomaknu; deterministički po danu
     period = day_idx // 10
-    r = random.Random(period)
+    r = random.Random(f"{chain}-{period}")
 
     def sub(m):
         v = int(m.group(1)) * 100 + int(m.group(3))
@@ -41,12 +41,12 @@ def wiggle(data: bytes, day_idx: int, enc: str) -> bytes:
     return (head + "\n").encode(enc) + price_re.sub(sub, body.encode(enc))
 
 
-for chain in ("konzum", "lidl", "plodine"):
+for chain in ("konzum", "lidl", "plodine", "kaufland", "spar"):
     adapter = get_adapter(chain)()
     base = [f for p in sorted((FIX / chain).glob("*.*")) for f in adapter.prepare(p.name, p.read_bytes())]
     for i in range(args.days, -1, -1):
         day = date.today() - timedelta(days=i)
-        enc = "cp1250" if chain == "lidl" else "utf-8"
-        files = [RawFile(f.name, wiggle(f.data, i, enc)) for f in base]
+        enc = "cp1250" if chain in ("lidl", "spar") else "utf-8"
+        files = [RawFile(f.name, wiggle(f.data, i, enc, chain)) for f in base]
         r = run_adapter(SessionLocal, chain, day, files=files, adapter=adapter)
     print(chain, r["status"], r["rows_total"])

@@ -92,3 +92,38 @@ def test_parse_quantity(q, u, name, expected):
 def test_match_name_strips_brand_and_qty():
     assert match_name("KRUH BIJELI 500 G", "KONZUM") == "kruh bijeli"
     assert match_name("Nutella krema 400g", "Ferrero") == "nutella krema"
+
+
+def test_map_headers_kaufland():
+    h = ["naziv proizvoda", "šifra proizvoda", "marka proizvoda", "neto količina(KG)",
+         "jedinica mjere", "maloprod.cijena(EUR)", "akc.cijena, A=akcija", "kol.jed.mj.",
+         "jed.mj. (1 KOM/L/KG)", "cijena jed.mj.(EUR)", "par.cijena za jed.mj.(EUR)",
+         "najniža MPC u 30dana", "Sidrena cijena", "barkod", "WG", "kategorija"]
+    m = map_headers(h)
+    assert m == {"name": 0, "code": 1, "brand": 2, "quantity": 3, "unit": 4,
+                 "regular_price": 5, "special_price": 6, "unit_price": 9,
+                 "lowest_30d": 11, "anchor_price": 12, "barcode": 13, "category": 15}
+
+
+@pytest.mark.parametrize("city,postcode,expected", [
+    ("VELIKA GORICA", None, "Velika Gorica"),
+    ("Velika_Gorica", None, "Velika Gorica"),
+    ("V.GORICA", None, "Velika Gorica"),
+    (None, "10410", "Velika Gorica"),
+    ("Kurilovec", "10410", "Velika Gorica"),
+    ("SIBENIK", None, "Šibenik"),
+    ("ZAGREB", "10000", "Zagreb"),
+    ("NEKO MALO MJESTO", None, "Neko Malo Mjesto"),
+    (None, None, None),
+])
+def test_normalize_city(city, postcode, expected):
+    from app.geo import normalize_city
+
+    assert normalize_city(city, postcode) == expected
+
+
+def test_find_city_multiword():
+    from app.geo import find_city
+
+    assert find_city("Hipermarket Velika Gorica Zagrebacka ulica".split()) == ("Velika Gorica", 1, 3)
+    assert find_city(["Ulica", "Vice", "Vukova"]) is None
