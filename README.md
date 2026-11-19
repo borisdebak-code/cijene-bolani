@@ -7,7 +7,17 @@ HTML stranice proizvoda se ne scrapaju.
 **Trgovci:** Konzum, Lidl, Kaufland, Spar, Interspar, Plodine.
 
 **Za korisnike** (javni način, `PUBLIC_MODE=true`):
-- pretraga s padajućim izbornikom konkretnih proizvoda (naziv ili barkod)
+- pretraga s padajućim izbornikom konkretnih proizvoda (naziv ili barkod); kad je upit
+  općenit (npr. "svježe mlijeko"), ispod rezultata se nude pitanja za sužavanje izbora:
+  zapremnina/težina, proizvođač, postotak (mliječna mast, alkohol ili udio kakaa – prema
+  vrsti proizvoda) i vrsta (bez laktoze, trajno/UHT, svježe, bio, light...). Pitanje se
+  prikazuje samo ako dijeli rezultate; atributi se izvlače iz naziva (`normalize.product_attrs`)
+- akcije: vrsta akcije (akcijska prodaja, sezonsko sniženje, rasprodaja), u koliko
+  poslovnica vrijedi i – ako je trgovac objavi – datum do kojeg vrijedi; cijena uz karticu
+  vjernosti (MultiPlus, Kaufland Card, Lidl Plus...) prikazuje se ljubičasto kao moguća
+  niža cijena. **Napomena:** u studenom 2026. nijedan od podržanih cjenika ne sadrži datum
+  trajanja akcije ni cijenu s karticom; parser ih prepoznaje čim se pojave (stupci
+  "vrijedi do", "trajanje", "kartica", "MultiPlus"...)
 - usporedba po trgovcima: uobičajena cijena (medijan po poslovnicama, s akcijama), raspon, akcije
 - graf povijesti cijene
 - **popis za kupnju** (gumb u donjem desnom kutu): za svaki proizvod najjeftinija trgovina,

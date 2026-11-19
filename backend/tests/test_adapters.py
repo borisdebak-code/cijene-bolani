@@ -167,12 +167,54 @@ def test_spar_real_filename_store_code():
     assert (s.code, s.city, s.address) == ("8701", "Zadar", "Bleiburskih Zrtava 18")
 
 
-def test_konzum_new_header_text_column_ignored():
-    from app.adapters.csvutil import map_headers
+def test_konzum_new_format_flag_and_base_price():
+    """Stvarni Konzumov format (studeni 2026): DA/NE zastavica, akcijska cijena u
+    MPC, redovna u BAZNA CIJENA."""
+    from app.adapters.csvutil import parse_price_csv
 
-    h = ("NAZIV PROIZVODA,ŠIFRA PROIZVODA,MARKA PROIZVODA,NETO KOLIČINA,JEDINICA MJERE,"
-         "MALOPRODAJNA CIJENA,POSEBAN OBLIK PRODAJE,NAZIV POSEBNOG OBLIKA PRODAJE,"
-         "CIJENA ZA JEDINICU MJERE,BARKOD,BAZNA CIJENA").split(",")
-    m = map_headers(h)
-    assert (m["special_price"], m["unit_price"], m["barcode"]) == (6, 8, 9)
-    assert 7 not in m.values()
+    csv_ = ("NAZIV PROIZVODA,ŠIFRA PROIZVODA,MARKA PROIZVODA,NETO KOLIČINA,JEDINICA MJERE,"
+            "MALOPRODAJNA CIJENA,POSEBAN OBLIK PRODAJE,NAZIV POSEBNOG OBLIKA PRODAJE,"
+            "CIJENA ZA JEDINICU MJERE,BARKOD,BAZNA CIJENA\n"
+            "KUPUS KISELI GLAVE,0001,,1.00 kg,kg,1.59,DA,Akcijska prodaja,1.59,,1.99\n"
+            "MRKVA,0002,,1.00 kg,kg,0.79,NE,,0.79,,0.79\n").encode()
+    rows, warnings, _ = parse_price_csv(csv_)
+    kupus, mrkva = rows
+    assert (kupus.regular_price, kupus.special_price, kupus.sale_type) == \
+        (Decimal("1.99"), Decimal("1.59"), "Akcijska prodaja")
+    assert (mrkva.regular_price, mrkva.special_price, mrkva.sale_type) == (Decimal("0.79"), None, None)
+
+
+def test_kaufland_real_format_flag_column_and_anchor():
+    """'akc.cijena, A=akcija' sadrži samo 'A' – cijena je u 'MPC poseb.oblik prod'."""
+    from app.adapters.csvutil import parse_price_csv
+
+    h = ["naziv proizvoda", "šifra proizvoda", "marka proizvoda", "neto količina(KG)",
+         "jedinica mjere", "maloprod.cijena(EUR)", "akc.cijena, A=akcija", "kol.jed.mj.",
+         "jed.mj. (1 KOM/L/KG)", "cijena jed.mj.(EUR)", "MPC poseb.oblik prod",
+         "Najniža MPC u 30dana", "Sidrena cijena", "barkod", "kategorija proizvoda"]
+    r1 = ["Juicy Fruits", "1", "Juicy", "0,2", "KOM", "  0,95", "A", "1", "L", "4,75", "  0,95",
+          "1,09", "MPC 2.5.2025=1,02€", "3838447000195", "PIĆE"]
+    r2 = ["Kruh", "2", "#", "0,5", "KOM", "  1,29", "", "1", "KG", "2,58", "", "1,29",
+          "MPC 2.5.2025=1,19€", "3838447000201", "HRANA"]
+    data = "\n".join("\t".join(r) for r in (h, r1, r2)).encode()
+    rows, _, _ = parse_price_csv(data)
+    a, b = rows
+    assert (a.special_price, a.sale_type, a.anchor_price, a.lowest_30d) == \
+        (Decimal("0.95"), "Akcija", Decimal("1.02"), Decimal("1.09"))
+    assert (b.special_price, b.anchor_price) == (None, Decimal("1.19"))
+
+
+def test_card_price_and_valid_until_when_published():
+    """Ako trgovac objavi datum trajanja akcije i cijenu s karticom, prenosimo ih."""
+    from datetime import date
+
+    from app.adapters.csvutil import parse_price_csv
+
+    data = ("Naziv;MPC;Akcijska cijena;Akcija vrijedi do;Cijena s MultiPlus karticom\n"
+            "Mlijeko;1,49;1,29;24.11.2026.;1,19\n"
+            "Kruh;1,09;;;\n").encode()
+    rows, _, _ = parse_price_csv(data)
+    m, k = rows
+    assert (m.special_price, m.valid_until, m.card_price, m.card_name) == \
+        (Decimal("1.29"), date(2026, 11, 24), Decimal("1.19"), "MultiPlus")
+    assert (k.special_price, k.card_price) == (None, None)

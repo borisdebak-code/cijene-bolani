@@ -27,7 +27,7 @@ from sqlalchemy import text  # noqa: E402
 
 from app.api.routes import _qty_label  # noqa: E402
 from app.db import engine  # noqa: E402
-from app.normalize import search_text  # noqa: E402
+from app.normalize import FEATURES, product_attrs, search_text  # noqa: E402
 
 FE = ROOT / "frontend"
 CHART_CDN = "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.js"
@@ -55,14 +55,21 @@ def main() -> None:
         updated = c.execute(text("SELECT max(last_day) FROM chain")).scalar()
         current = c.execute(text(
             """SELECT d.product_id, c.code, d.price_median, d.price_min, d.price_max,
-                      d.regular_median, d.stores, d.deal_stores
+                      d.regular_median, d.stores, d.deal_stores, d.deal_label, d.valid_until,
+                      d.card_price, d.card_name
                FROM chain_daily d JOIN chain c ON c.id = d.chain_id AND d.day = c.last_day
                ORDER BY d.product_id, d.price_median, d.price_min""")).all()
         by_product: dict[int, list] = defaultdict(list)
         for r in current:
-            by_product[r.product_id].append([r.code, money(r.price_median), money(r.price_min),
-                                             money(r.price_max), money(r.regular_median),
-                                             r.stores, r.deal_stores])
+            row = [r.code, money(r.price_median), money(r.price_min), money(r.price_max),
+                   money(r.regular_median), r.stores, r.deal_stores]
+            # podaci o akciji i kartici samo kad postoje (štedi prostor)
+            extra = [r.deal_label if r.deal_stores else None,
+                     r.valid_until.isoformat() if r.valid_until else None,
+                     money(r.card_price), r.card_name]
+            while extra and extra[-1] is None:
+                extra.pop()
+            by_product[r.product_id].append(row + extra)
         hist: dict[int, dict] = defaultdict(lambda: defaultdict(list))
         since = (updated or date.today()) - timedelta(days=args.days)
         for r in c.execute(text(
@@ -91,7 +98,9 @@ def main() -> None:
         # nazivi istog proizvoda kod drugih trgovaca (bez barkodova – oni su u eans.json)
         extra = " ".join(t for t in dict.fromkeys(p.search_text.split())
                          if t not in own and not (t.isdigit() and len(t) >= 8))
-        items.append([p.id, p.name, p.brand, qty, min(x[1] for x in cs), len(cs), extra or None])
+        pct, feat = product_attrs(p.name, p.brand)
+        items.append([p.id, p.name, p.brand, qty, min(x[1] for x in cs), len(cs), extra or None,
+                      pct, ",".join(feat) or None])
         h = {}
         for chain, pts in hist.get(p.id, {}).items():
             flat = []
@@ -110,6 +119,7 @@ def main() -> None:
     core = [i for i in items if i[5] >= 2]
     rest = [i for i in items if i[5] < 2]
     index = {"updated": updated.isoformat() if updated else None, "chains": chains,
+             "features": {k: v[0] for k, v in FEATURES.items()},
              "shards": args.shards, "items": core, "rest": "index-rest.json", "eans": "eans.json"}
     (out / "data" / "index.json").write_text(dump(index))
     (out / "data" / "index-rest.json").write_text(dump(rest))

@@ -137,5 +137,22 @@ def test_clean_brand_and_bad_kom_quantity():
     from app.normalize import clean_brand
 
     assert clean_brand("#") is None and clean_brand(" - ") is None and clean_brand("Žito") == "Žito"
+    assert clean_brand("`Z bregov") == "Z bregov"
     assert parse_quantity("0,02", "kom", "Boje za jaja") == (None, None)
     assert parse_quantity("0,02", "kom", "Boja za jaja 2g") == (Decimal("2"), "g")
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("Dukat svježe mlijeko 3,2% mm 1,5 l PET", ("m3.2", ["s"])),
+    ("Dukat trajno mlijeko 0,5 % mm 1 l", ("m0.5", ["t"])),
+    ("Z bregov mlijeko bez laktoze 2,8% m.m. 1L", ("m2.8", ["bl"])),
+    ("MLIJEKO SVJ. 2,8MM 1L", ("m2.8", ["s"])),
+    ("Ožujsko pivo 0,5 l 5% vol", ("a5", [])),
+    ("Milka čokolada 70% kakao", ("k70", [])),
+    ("Bio jogurt 3,2% 180g", ("m3.2", ["bio"])),
+    ("Jaja M 10/1", (None, [])),
+])
+def test_product_attrs(name, expected):
+    from app.normalize import product_attrs
+
+    assert product_attrs(name) == expected

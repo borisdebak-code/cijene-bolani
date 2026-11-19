@@ -8,7 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ..db import get_session
-from ..normalize import normalize_ean, search_text
+from ..normalize import normalize_ean, product_attrs, search_text
 
 router = APIRouter(prefix="/api")
 
@@ -242,7 +242,9 @@ def _qty_label(q, unit) -> str | None:
 
 @router.get("/suggest")
 def suggest(q: str = Query(..., min_length=2, max_length=100),
-            limit: int = Query(8, le=30), db: Session = Depends(get_session)):
+            limit: int = Query(8, le=500), db: Session = Depends(get_session)):
+    """Prijedlozi za pretragu, rangirani. S većim `limit` (npr. 400) sučelje iz
+    atributa (pct, feat) i marke/količine samo slaže pitanja za sužavanje izbora."""
     digits = re.sub(r"\D", "", q)
     if len(digits) >= 8 and len(digits) >= len(q.strip()) - 1:
         hits = """SELECT DISTINCT pr.id, 1.0 AS sim FROM product pr
@@ -278,7 +280,11 @@ def suggest(q: str = Query(..., min_length=2, max_length=100),
                  pr.name
         LIMIT :limit
         """), {**params, "limit": limit}).mappings().all()
-    return [{**dict(r), "qty": _qty_label(r["quantity"], r["unit"])} for r in rows]
+    out = []
+    for r in rows:
+        pct, feat = product_attrs(r["name"], r["brand"])
+        out.append({**dict(r), "qty": _qty_label(r["quantity"], r["unit"]), "pct": pct, "feat": feat})
+    return out
 
 
 @router.get("/products/{product_id}/summary")
@@ -291,7 +297,8 @@ def product_summary(product_id: int, days: int = Query(90, ge=1, le=730),
     chains_ = db.execute(text(
         """SELECT c.code AS chain, c.name AS chain_name, d.price_median AS price,
                   d.price_min AS min, d.price_max AS max, d.regular_median AS regular,
-                  d.stores, d.deal_stores, d.day
+                  d.stores, d.deal_stores, d.day, d.deal_label, d.valid_until,
+                  d.card_price, d.card_name
            FROM chain_daily d JOIN chain c ON c.id = d.chain_id AND d.day = c.last_day
            WHERE d.product_id = :id ORDER BY d.price_median, d.price_min, c.name"""),
         {"id": product_id}).mappings().all()
@@ -311,7 +318,11 @@ def product_summary(product_id: int, days: int = Query(90, ge=1, le=730),
 
 
 @router.get("/config")
-def config():
+def config(db: Session = Depends(get_session)):
     import os
 
-    return {"public": os.environ.get("PUBLIC_MODE", "").lower() in {"1", "true", "yes"}}
+    from ..normalize import FEATURES
+
+    return {"public": os.environ.get("PUBLIC_MODE", "").lower() in {"1", "true", "yes"},
+            "updated": db.execute(text("SELECT max(last_day) FROM chain")).scalar(),
+            "features": {k: v[0] for k, v in FEATURES.items()}}

@@ -101,6 +101,10 @@ class Price(Base):
     special_price: Mapped[float | None] = mapped_column(Money)
     lowest_30d: Mapped[float | None] = mapped_column(Money)
     anchor_price: Mapped[float | None] = mapped_column(Money)
+    sale_type: Mapped[str | None] = mapped_column(String(60))
+    valid_until: Mapped[date | None] = mapped_column(Date)
+    card_price: Mapped[float | None] = mapped_column(Money)
+    card_name: Mapped[str | None] = mapped_column(String(40))
 
     __table_args__ = (
         Index("ux_price_current", "store_id", "chain_product_id", unique=True,
@@ -121,6 +125,10 @@ class ChainDaily(Base):
     regular_median: Mapped[float] = mapped_column(Money)
     stores: Mapped[int] = mapped_column(Integer)
     deal_stores: Mapped[int] = mapped_column(Integer)
+    deal_label: Mapped[str | None] = mapped_column(String(60))
+    valid_until: Mapped[date | None] = mapped_column(Date)
+    card_price: Mapped[float | None] = mapped_column(Money)
+    card_name: Mapped[str | None] = mapped_column(String(40))
 
     __table_args__ = (Index("ix_chain_daily_day", "day", "chain_id"),)
 

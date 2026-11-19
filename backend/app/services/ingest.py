@@ -52,7 +52,7 @@ class ChainLog(logging.LoggerAdapter):
 STGP_COLS = ("code", "name", "brand", "quantity_raw", "unit_raw", "quantity", "unit", "ean",
              "barcode_raw", "category", "match_name", "name_display", "search_text")
 STG_COLS = ("store_id", "code", "regular_price", "unit_price", "special_price",
-            "lowest_30d", "anchor_price")
+            "lowest_30d", "anchor_price", "sale_type", "valid_until", "card_price", "card_name")
 BATCH_ROWS = int(os.environ.get("INGEST_BATCH_ROWS", "400000"))
 
 
@@ -146,7 +146,9 @@ def ingest_batch(session: Session, sps: list[StorePrices], day: date) -> dict:
                 )
             prices[(store_id, code)] = (store_id, code, regular, _money(r.unit_price),
                                         _money(r.special_price), _money(r.lowest_30d),
-                                        _money(r.anchor_price))
+                                        _money(r.anchor_price), (r.sale_type or "")[:60] or None,
+                                        r.valid_until, _money(r.card_price),
+                                        (r.card_name or "")[:40] or None)
 
     session.execute(text(
         """CREATE TEMP TABLE stgp (code text, name text, brand text, quantity_raw text,
@@ -156,7 +158,8 @@ def ingest_batch(session: Session, sps: list[StorePrices], day: date) -> dict:
     session.execute(text(
         """CREATE TEMP TABLE stg (store_id int, code text, regular_price numeric,
              unit_price numeric, special_price numeric, lowest_30d numeric,
-             anchor_price numeric) ON COMMIT DROP"""))
+             anchor_price numeric, sale_type text, valid_until date, card_price numeric,
+             card_name text) ON COMMIT DROP"""))
     raw = session.connection().connection.driver_connection
     with raw.cursor() as cur:
         with cur.copy(f"COPY stgp ({', '.join(STGP_COLS)}) FROM STDIN") as copy:
@@ -240,12 +243,15 @@ def ingest_batch(session: Session, sps: list[StorePrices], day: date) -> dict:
     session.execute(text(
         """CREATE TEMP TABLE stp ON COMMIT DROP AS
            SELECT s.store_id, g.cp_id, s.regular_price, s.unit_price, s.special_price,
-                  s.lowest_30d, s.anchor_price
+                  s.lowest_30d, s.anchor_price, s.sale_type, s.valid_until, s.card_price,
+                  s.card_name
            FROM stg s JOIN stgp g USING (code)"""))
     session.execute(text("ANALYZE stp"))
-    same = """(p.regular_price, p.special_price, p.unit_price, p.lowest_30d, p.anchor_price)
+    same = """(p.regular_price, p.special_price, p.unit_price, p.lowest_30d, p.anchor_price,
+               p.valid_until, p.card_price)
               IS NOT DISTINCT FROM
-              (s.regular_price, s.special_price, s.unit_price, s.lowest_30d, s.anchor_price)"""
+              (s.regular_price, s.special_price, s.unit_price, s.lowest_30d, s.anchor_price,
+               s.valid_until, s.card_price)"""
     extended = session.execute(text(
         f"""
         UPDATE price p SET last_seen = :d FROM stp s
@@ -261,13 +267,38 @@ def ingest_batch(session: Session, sps: list[StorePrices], day: date) -> dict:
     inserted = session.execute(text(
         """
         INSERT INTO price (store_id, chain_product_id, valid_from, last_seen, is_current,
-                           regular_price, unit_price, special_price, lowest_30d, anchor_price)
+                           regular_price, unit_price, special_price, lowest_30d, anchor_price,
+                           sale_type, valid_until, card_price, card_name)
         SELECT s.store_id, s.cp_id, :d, :d, true, s.regular_price, s.unit_price,
-               s.special_price, s.lowest_30d, s.anchor_price
+               s.special_price, s.lowest_30d, s.anchor_price, s.sale_type, s.valid_until,
+               s.card_price, s.card_name
         FROM stp s
         WHERE NOT EXISTS (SELECT 1 FROM price p WHERE p.is_current
                           AND p.store_id = s.store_id AND p.chain_product_id = s.cp_id)
         """), p).rowcount
+
+    # ponovni unos istog dana (npr. trgovac je ispravio cjenik):
+    #  - zapis nastao danas smije se ispraviti u cijelosti (nema povijesti koju bi prepisao)
+    #  - produženom ranijem zapisu mijenjaju se samo opisna polja akcije
+    session.execute(text(
+        f"""
+        UPDATE price p SET special_price = s.special_price, unit_price = s.unit_price,
+               lowest_30d = s.lowest_30d, anchor_price = s.anchor_price,
+               valid_until = s.valid_until, card_price = s.card_price,
+               sale_type = s.sale_type, card_name = s.card_name
+        FROM stp s
+        WHERE p.is_current AND p.store_id = s.store_id AND p.chain_product_id = s.cp_id
+          AND p.valid_from = :d AND p.last_seen = :d AND p.regular_price = s.regular_price
+          AND NOT ({same} AND (p.sale_type, p.card_name) IS NOT DISTINCT FROM (s.sale_type, s.card_name))
+        """), p)
+    session.execute(text(
+        """
+        UPDATE price p SET sale_type = s.sale_type, card_name = s.card_name
+        FROM stp s
+        WHERE p.is_current AND p.store_id = s.store_id AND p.chain_product_id = s.cp_id
+          AND p.valid_from < :d AND p.last_seen = :d
+          AND (p.sale_type, p.card_name) IS DISTINCT FROM (s.sale_type, s.card_name)
+        """), p)
 
     session.execute(text(
         "UPDATE chain SET last_day = :d WHERE id = :chain AND (last_day IS NULL OR last_day < :d)"), p)
@@ -288,7 +319,8 @@ def refresh_daily(session: Session, chain_code: str, day: date) -> int:
     return session.execute(text(
         """
         INSERT INTO chain_daily (product_id, chain_id, day, price_median, price_min, price_max,
-                                 regular_median, stores, deal_stores)
+                                 regular_median, stores, deal_stores, deal_label, valid_until,
+                                 card_price, card_name)
         SELECT cp.product_id, cp.chain_id, CAST(:d AS date),
                percentile_disc(0.5) WITHIN GROUP (ORDER BY LEAST(p.special_price, p.regular_price)),
                min(LEAST(p.special_price, p.regular_price)),
@@ -296,7 +328,11 @@ def refresh_daily(session: Session, chain_code: str, day: date) -> int:
                percentile_disc(0.5) WITHIN GROUP (ORDER BY p.regular_price),
                count(*),
                count(*) FILTER (WHERE p.special_price IS NOT NULL
-                                OR LEAST(p.special_price, p.regular_price) < p.lowest_30d)
+                                OR LEAST(p.special_price, p.regular_price) < p.lowest_30d),
+               mode() WITHIN GROUP (ORDER BY p.sale_type) FILTER (WHERE p.special_price IS NOT NULL),
+               mode() WITHIN GROUP (ORDER BY p.valid_until) FILTER (WHERE p.valid_until IS NOT NULL),
+               min(p.card_price),
+               mode() WITHIN GROUP (ORDER BY p.card_name) FILTER (WHERE p.card_price IS NOT NULL)
         FROM price p
         JOIN chain_product cp ON cp.id = p.chain_product_id
         JOIN chain c ON c.id = cp.chain_id

@@ -210,7 +210,7 @@ def test_public_mode_hides_admin(loaded, monkeypatch):
     monkeypatch.setenv("PUBLIC_MODE", "1")
     with TestClient(app) as c:
         assert c.get("/api/status").status_code == 404
-        assert c.get("/api/config").json() == {"public": True}
+        assert c.get("/api/config").json()["public"] is True
 
 
 def test_export_static(loaded, tmp_path):
@@ -230,3 +230,36 @@ def test_export_static(loaded, tmp_path):
     shard = json.loads((tmp_path / f"data/p/{nut[0] % 4}.json").read_text())
     assert {c[0] for c in shard[str(nut[0])]["c"]} == set(ix["chains"])
     assert 'CIJENE_STATIC' in (tmp_path / "index.html").read_text()
+
+
+def test_same_day_reload_fills_sale_details(loaded, db_engine, fixtures):
+    """Ponovni unos istog dana dopunjava vrstu akcije, a povijest ostaje ista."""
+    from app.db import SessionLocal
+    from app.services.ingest import run_adapter
+
+    before = q(db_engine, "SELECT count(*) FROM price")[0][0]
+    files = raw_files(fixtures, "konzum")
+    zg = next(f for f in files if "ZAGREB" in f.name)
+    # isti cjenik, ali s vrstom akcije i datumom trajanja
+    data = zg.data.decode().splitlines()
+    data[0] += ',NAZIV POSEBNOG OBLIKA PRODAJE,AKCIJA VRIJEDI DO'
+    data[1:] = [line + ',"Akcijska prodaja","24.11.2026"' for line in data[1:] if line]
+    run_adapter(SessionLocal, "konzum", DAY,
+                files=[RawFile(zg.name, ("\r\n".join(data) + "\r\n").encode())])
+    assert q(db_engine, "SELECT count(*) FROM price")[0][0] == before
+    row = q(db_engine, """SELECT p.sale_type, p.valid_until FROM price p
+                          JOIN chain_product cp ON cp.id = p.chain_product_id
+                          JOIN store s ON s.id = p.store_id
+                          WHERE cp.code = '204411' AND s.code = '0204'""")
+    assert row == [("Akcijska prodaja", date(2026, 11, 24))]
+    d = q(db_engine, """SELECT d.deal_label, d.valid_until FROM chain_daily d
+                        JOIN chain c ON c.id = d.chain_id JOIN product pr ON pr.id = d.product_id
+                        WHERE c.code = 'konzum' AND pr.ean = :e""", e=NUTELLA)
+    assert d == [("Akcijska prodaja", date(2026, 11, 24))]
+
+
+def test_api_suggest_returns_attrs_for_refinement(client):
+    res = client.get("/api/suggest", params={"q": "mlijeko", "limit": 100}).json()
+    milk = next(r for r in res if r["ean"] == MLIJEKO)
+    assert milk["pct"] == "m2.8" and "s" in milk["feat"]
+    assert client.get("/api/config").json()["features"]["bl"] == "bez laktoze"

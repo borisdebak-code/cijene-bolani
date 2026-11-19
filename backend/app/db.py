@@ -21,6 +21,18 @@ def init_db(eng=None) -> None:
     with eng.begin() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
     Base.metadata.create_all(eng)
+    # jednostavne migracije za postojeće baze (create_all ne dodaje stupce)
+    with eng.begin() as conn:
+        for table, col, typ in MIGRATIONS:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {typ}"))
+
+
+MIGRATIONS = [
+    ("price", "sale_type", "varchar(60)"), ("price", "valid_until", "date"),
+    ("price", "card_price", "numeric(10,2)"), ("price", "card_name", "varchar(40)"),
+    ("chain_daily", "deal_label", "varchar(60)"), ("chain_daily", "valid_until", "date"),
+    ("chain_daily", "card_price", "numeric(10,2)"), ("chain_daily", "card_name", "varchar(40)"),
+]
 
 
 @contextmanager

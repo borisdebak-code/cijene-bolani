@@ -47,6 +47,13 @@ class PriceRow:
     special_price: Decimal | None = None
     lowest_30d: Decimal | None = None
     anchor_price: Decimal | None = None
+    #: vrsta posebnog oblika prodaje ("Akcijska prodaja", "Rasprodaja"...)
+    sale_type: str | None = None
+    #: do kada vrijedi akcijska cijena, ako je trgovac objavi
+    valid_until: date | None = None
+    #: niža cijena uz karticu vjernosti (MultiPlus, Kaufland Card, Lidl Plus...)
+    card_price: Decimal | None = None
+    card_name: str | None = None
 
 
 @dataclass(slots=True)

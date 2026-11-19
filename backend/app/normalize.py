@@ -124,7 +124,7 @@ def clean_brand(brand: str | None) -> str | None:
     """Neki trgovci umjesto prazne marke pišu '#', '-', '.'."""
     if not brand or not re.search(r"[0-9A-Za-zČĆŽŠĐčćžšđ]", brand):
         return None
-    return brand.strip()
+    return brand.strip(" `'\"#*-.,;")
 
 
 def search_text(*parts: str | None) -> str:
@@ -157,3 +157,59 @@ def display_name(s: str) -> str:
     if s.isupper():
         return s[:1] + s[1:].lower()
     return s
+
+
+# --------------------------------------------------------------------------- #
+# Atributi za sužavanje pretrage ("koja mliječna mast?", "koja vrsta?")
+# --------------------------------------------------------------------------- #
+
+_PCT = re.compile(r"(?<![\d,.])(\d{1,2}(?:[.,]\d{1,2})?)\s*%")
+_MM = re.compile(r"(?<![\d,.])(\d{1,2}(?:[.,]\d)?)\s*m\.?\s*m\b")      # "2,8 mm", "3.2 m.m."
+_DAIRY = ("mlijek", "jogurt", "vrhnj", "sir ", "sirni", "kefir", "maslac", "skut", "acidofil",
+          "puding", "mozzarel", "gauda", "edamer", "mileram", "kiselo")
+_ALCOHOL = ("pivo", "piva", "vino", "vina", "rakij", "liker", "vodk", "votk", "gin ", "whisk",
+            "viski", "rum ", "konjak", "brandy", "pelinkovac", "travarica", "sljivovica", "prosecco",
+            "pjenusac", "sampanj", " vol")
+_COCOA = ("cokolad", "kakao", "cocoa")
+
+#: kod -> (oznaka za prikaz, uzorci u nazivu bez dijakritike)
+FEATURES = {
+    "bl": ("bez laktoze", ("bez laktoze", "b laktoze", "lactose free", "laktoze free")),
+    "bg": ("bez glutena", ("bez glutena", "gluten free", "glutenfree")),
+    "bs": ("bez šećera", ("bez secera", "bez dodanog secera", "zero", "sugar free")),
+    "t": ("trajno / UHT", ("trajno", "uht")),
+    "s": ("svježe", ("svjeze", "svjez ", " svj ")),
+    "bio": ("bio / eko", (" bio ", " eko ", "organic")),
+    "l": ("light / lagano", ("light", "lagan")),
+    "i": ("integralno", ("integral",)),
+    "p": ("proteinsko", ("protein",)),
+    "v": ("vegansko / biljno", ("vegan", "biljn")),
+}
+
+
+def product_attrs(name: str, brand: str | None = None) -> tuple[str | None, list[str]]:
+    """Vrati (postotak s vrstom, npr. 'm2.8' / 'a5' / 'k70' / 'p10', [kodovi vrste]).
+
+    m = mliječna mast, a = alkohol, k = udio kakaa, p = ostalo.
+    """
+    t = " " + strip_accents(f"{name} {brand or ''}").lower().replace("_", " ") + " "
+    pct = None
+    m = _PCT.search(t)
+    mm = _MM.search(t)
+    if m or mm:
+        val = (m or mm).group(1).replace(",", ".")
+        val = f"{float(val):g}"
+        if mm or any(k in t for k in _DAIRY):
+            kind = "m"
+        elif any(k in t for k in _ALCOHOL):
+            kind = "a"
+        elif any(k in t for k in _COCOA):
+            kind = "k"
+        else:
+            kind = "p"
+        pct = kind + val
+    words = re.sub(r"[^a-z0-9%]+", " ", t)
+    words = f" {words} "
+    feats = [code for code, (_, pats) in FEATURES.items()
+             if any(p in t or p in words for p in pats)]
+    return pct, feats

@@ -23,7 +23,7 @@ from collections import defaultdict
 from datetime import date
 
 from .base import Adapter, FormatChanged, PriceRow, StoreInfo, StorePrices
-from .csvutil import decode_bytes, parse_decimal
+from .csvutil import decode_bytes, parse_date, parse_decimal
 
 
 class CijeneDevAdapter(Adapter):
@@ -91,6 +91,9 @@ class CijeneDevAdapter(Adapter):
                 special = parse_decimal(p.get("special_price"))
                 if regular is None and special is None:
                     continue
+                sale_type = (p.get("special_sale_type") or "").strip() or None
+                if special is not None and special == regular and not sale_type:
+                    special = None
                 per_store[p["store_id"]].append(PriceRow(
                     code=prod["product_id"],
                     name=prod.get("name") or "",
@@ -101,9 +104,13 @@ class CijeneDevAdapter(Adapter):
                     category=prod.get("category") or None,
                     regular_price=regular if regular is not None else special,
                     unit_price=parse_decimal(p.get("unit_price")),
-                    special_price=special if special != regular else None,
+                    special_price=special,
                     lowest_30d=parse_decimal(p.get("best_price_30")),
                     anchor_price=parse_decimal(p.get("anchor_price")),
+                    sale_type=(sale_type or "Akcija") if special is not None else None,
+                    valid_until=parse_date(p.get("special_price_until") or p.get("valid_until")),
+                    card_price=parse_decimal(p.get("loyalty_price") or p.get("card_price")),
+                    card_name=p.get("loyalty_program") or p.get("card_name") or None,
                 ))
         for store_id, rows in per_store.items():
             s = stores.get(store_id, {})
