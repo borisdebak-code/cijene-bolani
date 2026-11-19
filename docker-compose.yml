@@ -20,6 +20,7 @@ services:
       DATABASE_URL: postgresql+psycopg://cijene:${POSTGRES_PASSWORD:-cijene}@db:5432/cijene
       TEST_DATABASE_URL: postgresql+psycopg://cijene:${POSTGRES_PASSWORD:-cijene}@db:5432/cijene_test
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PUBLIC_MODE: ${PUBLIC_MODE:-true}
       TZ: Europe/Zagreb
     ports: ["${API_PORT:-8000}:8000"]
     depends_on: { db: { condition: service_healthy } }
@@ -31,6 +32,9 @@ services:
     environment:
       <<: *env
       INGEST_AT: ${INGEST_AT:-08:30}
+      RETRY_UNTIL_HOUR: ${RETRY_UNTIL_HOUR:-14}
+      INGEST_CHAINS: ${INGEST_CHAINS:-cijenedev,plodine}
+      CIJENEDEV_CHAINS: ${CIJENEDEV_CHAINS:-konzum,lidl,kaufland,spar}
       INGEST_ON_START: ${INGEST_ON_START:-false}
       RAW_ARCHIVE_DIR: /data/raw
     volumes:

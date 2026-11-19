@@ -109,6 +109,22 @@ class Price(Base):
     )
 
 
+class ChainDaily(Base):
+    """Dnevni sažetak cijene proizvoda po trgovcu (puni se nakon svakog preuzimanja)."""
+    __tablename__ = "chain_daily"
+    product_id: Mapped[int] = mapped_column(ForeignKey("product.id"), primary_key=True)
+    chain_id: Mapped[int] = mapped_column(ForeignKey("chain.id"), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    price_median: Mapped[float] = mapped_column(Money)
+    price_min: Mapped[float] = mapped_column(Money)
+    price_max: Mapped[float] = mapped_column(Money)
+    regular_median: Mapped[float] = mapped_column(Money)
+    stores: Mapped[int] = mapped_column(Integer)
+    deal_stores: Mapped[int] = mapped_column(Integer)
+
+    __table_args__ = (Index("ix_chain_daily_day", "day", "chain_id"),)
+
+
 class IngestRun(Base):
     """Jedan pokušaj preuzimanja za jednog trgovca i jedan dan."""
     __tablename__ = "ingest_run"

@@ -13,7 +13,7 @@ DAY = date.today() - timedelta(days=1)
 
 
 def raw_files(fixtures, chain) -> list[RawFile]:
-    return [f for p in sorted((fixtures / chain).iterdir()) for f in unpack(p.name, p.read_bytes())]
+    return [f for p in sorted((fixtures / chain).iterdir()) if p.is_file() for f in unpack(p.name, p.read_bytes())]
 
 
 @pytest.fixture()
@@ -181,3 +181,52 @@ def test_api_status_and_meta(client):
     cities = {c["city"] for c in client.get("/api/cities").json()}
     assert {"Zagreb", "Split", "Prelog", "Jastrebarsko", "Velika Gorica"} <= cities
     assert client.get("/").status_code == 200
+
+
+def test_api_suggest(client, db_engine):
+    res = client.get("/api/suggest", params={"q": "nutel"}).json()
+    assert res[0]["ean"] == NUTELLA and res[0]["chains"] == 6 and res[0]["qty"] == "400 g"
+    assert client.get("/api/suggest", params={"q": MLIJEKO}).json()[0]["ean"] == MLIJEKO
+    assert client.get("/api/suggest", params={"q": "nepostojeciproizvod"}).json() == []
+
+
+def test_api_summary_per_chain(client, db_engine):
+    pid = product_id(db_engine, NUTELLA)
+    s = client.get(f"/api/products/{pid}/summary").json()
+    by = {c["chain"]: c for c in s["chains"]}
+    # Konzum: Zagreb 3,99 (akcija), Split i V. Gorica 4,99 -> medijan 4,99, min 3,99
+    assert (by["konzum"]["price"], by["konzum"]["min"], by["konzum"]["stores"]) == (4.99, 3.99, 3)
+    assert by["konzum"]["deal_stores"] == 1
+    prices = [c["price"] for c in s["chains"]]
+    assert prices == sorted(prices)
+    assert {h["chain"] for h in s["history"]} == set(by)
+
+
+def test_public_mode_hides_admin(loaded, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    monkeypatch.setenv("PUBLIC_MODE", "1")
+    with TestClient(app) as c:
+        assert c.get("/api/status").status_code == 404
+        assert c.get("/api/config").json() == {"public": True}
+
+
+def test_export_static(loaded, tmp_path):
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from app.db import DATABASE_URL
+
+    root = Path(__file__).resolve().parents[2]
+    subprocess.run([sys.executable, str(root / "scripts/export_static.py"), str(tmp_path),
+                    "--shards", "4"], check=True, env={"DATABASE_URL": DATABASE_URL, "PATH": "/usr/bin"})
+    ix = json.loads((tmp_path / "data/index.json").read_text())
+    nut = next(i for i in ix["items"] if i[1].lower().startswith("nutella"))
+    assert nut[5] == 6 and nut[4] == 3.79
+    shard = json.loads((tmp_path / f"data/p/{nut[0] % 4}.json").read_text())
+    assert {c[0] for c in shard[str(nut[0])]["c"]} == set(ix["chains"])
+    assert 'CIJENE_STATIC' in (tmp_path / "index.html").read_text()

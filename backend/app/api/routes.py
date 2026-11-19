@@ -202,6 +202,10 @@ def chains(db: Session = Depends(get_session)):
 @router.get("/status")
 def status(db: Session = Depends(get_session)):
     """Stanje zadnjeg preuzimanja po adapteru – ovdje se vidi koji je pukao."""
+    import os
+
+    if os.environ.get("PUBLIC_MODE", "").lower() in {"1", "true", "yes"}:
+        raise HTTPException(404, "Nije dostupno")
     from ..adapters import all_adapters
 
     last = {r["chain_code"]: dict(r) for r in db.execute(text(
@@ -217,3 +221,97 @@ def status(db: Session = Depends(get_session)):
         out.append({"adapter": code, "name": cls.name, "scheduled": cls.enabled_by_default,
                     "last_run": last.get(code)})
     return {"adapters": out, "recent_errors": [dict(e) for e in errors]}
+
+
+# --------------------------------------------------------------------------- #
+# Javno sučelje: prijedlozi za pretragu i sažetak proizvoda po trgovcu.
+# "Uobičajena cijena" = medijan cijene (s akcijom) u poslovnicama trgovca,
+# iz tablice chain_daily – brzo i bez skeniranja svih cijena.
+# --------------------------------------------------------------------------- #
+
+def _qty_label(q, unit) -> str | None:
+    if q is None:
+        return None
+    q = float(q)
+    if unit == "g" and q >= 1000:
+        return f"{q / 1000:g} kg"
+    if unit == "ml" and q >= 1000:
+        return f"{q / 1000:g} l"
+    return f"{q:g} {unit or ''}".strip()
+
+
+@router.get("/suggest")
+def suggest(q: str = Query(..., min_length=2, max_length=100),
+            limit: int = Query(8, le=30), db: Session = Depends(get_session)):
+    digits = re.sub(r"\D", "", q)
+    if len(digits) >= 8 and len(digits) >= len(q.strip()) - 1:
+        hits = """SELECT DISTINCT pr.id, 1.0 AS sim FROM product pr
+                  LEFT JOIN chain_product cp ON cp.product_id = pr.id
+                  WHERE pr.ean = :ean OR cp.ean = :ean"""
+        params = {"ean": normalize_ean(digits) or digits, "words": [r"\m"], "first": ""}
+    else:
+        tokens = search_text(q).split()
+        if not tokens:
+            return []
+        # LIKE koristi trigram indeks, regex (\m = početak riječi) izbacuje pogotke
+        # usred riječi ili barkoda ("400" ne smije pogoditi 4008400401829)
+        hits = """SELECT pr.id, similarity(pr.search_text, :q) AS sim FROM product pr
+                  WHERE pr.search_text LIKE ALL(:pats) AND pr.search_text ~ ALL(:words)
+                  ORDER BY sim DESC LIMIT 400"""
+        params = {"q": " ".join(tokens), "pats": [f"%{t}%" for t in tokens],
+                  "words": [rf"\m{re.escape(t)}" for t in tokens], "first": re.escape(tokens[0])}
+    rows = db.execute(text(
+        f"""
+        WITH hits AS ({hits})
+        SELECT pr.id, pr.name, pr.brand, pr.quantity, pr.unit, pr.ean,
+               agg.min_price, agg.chains
+        FROM hits h JOIN product pr ON pr.id = h.id
+        JOIN LATERAL (
+            SELECT min(d.price_median) AS min_price, count(*) AS chains
+            FROM chain_daily d JOIN chain c ON c.id = d.chain_id AND d.day = c.last_day
+            WHERE d.product_id = pr.id
+        ) agg ON agg.chains > 0
+        ORDER BY h.sim + LEAST(agg.chains, 6) * 0.12
+                 -- riječi u samom nazivu (ne samo u nazivima drugih trgovaca)
+                 + CASE WHEN pr.match_name ~ ALL(:words) THEN 0.4 ELSE 0 END
+                 + CASE WHEN pr.match_name ~ ('^' || :first) THEN 0.3 ELSE 0 END DESC,
+                 pr.name
+        LIMIT :limit
+        """), {**params, "limit": limit}).mappings().all()
+    return [{**dict(r), "qty": _qty_label(r["quantity"], r["unit"])} for r in rows]
+
+
+@router.get("/products/{product_id}/summary")
+def product_summary(product_id: int, days: int = Query(90, ge=1, le=730),
+                    db: Session = Depends(get_session)):
+    pr = db.execute(text("SELECT id, name, brand, quantity, unit, ean, category FROM product "
+                         "WHERE id = :id"), {"id": product_id}).mappings().first()
+    if not pr:
+        raise HTTPException(404, "Proizvod ne postoji")
+    chains_ = db.execute(text(
+        """SELECT c.code AS chain, c.name AS chain_name, d.price_median AS price,
+                  d.price_min AS min, d.price_max AS max, d.regular_median AS regular,
+                  d.stores, d.deal_stores, d.day
+           FROM chain_daily d JOIN chain c ON c.id = d.chain_id AND d.day = c.last_day
+           WHERE d.product_id = :id ORDER BY d.price_median, d.price_min, c.name"""),
+        {"id": product_id}).mappings().all()
+    hist = db.execute(text(
+        """SELECT c.code AS chain, c.name AS chain_name, d.day, d.price_median AS price
+           FROM chain_daily d JOIN chain c ON c.id = d.chain_id
+           WHERE d.product_id = :id AND d.day >= CAST(:since AS date)
+           ORDER BY c.name, d.day"""),
+        {"id": product_id, "since": date.today() - timedelta(days=days)}).mappings().all()
+    history: dict[str, dict] = {}
+    for h in hist:
+        history.setdefault(h["chain"], {"chain": h["chain"], "chain_name": h["chain_name"],
+                                        "points": []})["points"].append(
+            {"day": h["day"], "price": h["price"]})
+    return {**pr, "qty": _qty_label(pr["quantity"], pr["unit"]),
+            "chains": [dict(c) for c in chains_], "history": list(history.values())}
+
+
+@router.get("/config")
+def config():
+    import os
+
+    return {"public": os.environ.get("PUBLIC_MODE", "").lower() in {"1", "true", "yes"}}

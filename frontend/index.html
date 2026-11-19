@@ -2,7 +2,7 @@
 <html lang="hr">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Cijene HR</title>
   <meta name="description" content="Usporedba cijena proizvoda u trgovinama u Hrvatskoj">
   <link rel="stylesheet" href="/static/style.css">
@@ -10,25 +10,47 @@
   <script src="/static/app.js" defer></script>
 </head>
 <body>
+  <!--APP-->
   <header class="top">
     <div class="wrap top-inner">
-      <a href="#/" class="logo">Cijene<span>HR</span></a>
-      <form id="search-form" class="search" role="search">
-        <input id="q" type="search" placeholder="Proizvod ili barkod (npr. mlijeko, 3858882210041)"
-               autocomplete="off" aria-label="Pretraga">
-        <button type="submit">Traži</button>
+      <a href="#" data-go="home" class="logo">Cijene<span>HR</span></a>
+      <form id="search-form" class="search" role="search" autocomplete="off">
+        <svg class="s-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        <input id="q" type="search" placeholder="Traži proizvod ili barkod" aria-label="Pretraga proizvoda"
+               role="combobox" aria-autocomplete="list" aria-controls="sug" aria-expanded="false" enterkeyhint="search">
+        <ul id="sug" class="sug" role="listbox" hidden></ul>
       </form>
-      <select id="city" aria-label="Grad">
-        <option value="">Svi gradovi</option>
-      </select>
     </div>
   </header>
 
-  <main class="wrap" id="view" aria-live="polite"></main>
+  <main class="wrap">
+    <a href="#" data-go="back" id="back" class="small back" hidden>← natrag</a>
+    <div id="view" aria-live="polite"></div>
+  </main>
 
   <footer class="wrap foot">
-    Podaci iz službenih cjenika trgovaca (NN 101/2026). ·
-    <a href="#/status">Stanje preuzimanja</a> · <a href="/docs">API</a>
+    Cijene iz službenih cjenika trgovaca (Odluka NN 75/2025). <span id="updated"></span>
   </footer>
+
+  <button id="fab" class="fab" aria-expanded="false" aria-controls="panel" aria-label="Popis za kupnju">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h2l2.4 11.2a1.5 1.5 0 0 0 1.5 1.2h8.6a1.5 1.5 0 0 0 1.5-1.1L21 8H6.2"/><circle cx="9.5" cy="20" r="1.3"/><circle cx="17" cy="20" r="1.3"/></svg>
+    <span>Popis</span><span id="fab-count" class="fab-count" hidden>0</span>
+  </button>
+
+  <aside id="panel" class="panel" hidden aria-label="Popis za kupnju">
+    <header class="panel-head">
+      <h2>Popis za kupnju</h2>
+      <button id="panel-close" class="icon" aria-label="Zatvori">×</button>
+    </header>
+    <div class="tabs" role="tablist">
+      <button role="tab" data-tab="shops">Po trgovinama</button>
+      <button role="tab" data-tab="items">Proizvodi</button>
+      <button role="tab" data-tab="one">Sve u jednoj</button>
+    </div>
+    <div id="panel-body" class="panel-body"></div>
+    <footer id="panel-foot" class="panel-foot"></footer>
+  </aside>
+
+  <div id="toast" class="toast" role="status" hidden></div>
 </body>
 </html>

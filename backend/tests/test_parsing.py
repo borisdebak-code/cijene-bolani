@@ -127,3 +127,15 @@ def test_find_city_multiword():
 
     assert find_city("Hipermarket Velika Gorica Zagrebacka ulica".split()) == ("Velika Gorica", 1, 3)
     assert find_city(["Ulica", "Vice", "Vukova"]) is None
+
+
+def test_match_name_keeps_brand_when_name_is_only_brand():
+    assert match_name("Nutella 400g", "Nutella") == "nutella"
+
+
+def test_clean_brand_and_bad_kom_quantity():
+    from app.normalize import clean_brand
+
+    assert clean_brand("#") is None and clean_brand(" - ") is None and clean_brand("Žito") == "Žito"
+    assert parse_quantity("0,02", "kom", "Boje za jaja") == (None, None)
+    assert parse_quantity("0,02", "kom", "Boja za jaja 2g") == (Decimal("2"), "g")

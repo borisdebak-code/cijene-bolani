@@ -36,7 +36,7 @@ class KonzumAdapter(Adapter):
                 urljoin(self.base_url, html.unescape(h))
                 for h in _LINK.findall(r.text)
             ]
-            new = [u for u in new if u not in seen]
+            new = list(dict.fromkeys(u for u in new if u not in seen))
             if not new:
                 break
             seen.update(new)

@@ -92,8 +92,9 @@ def norm_header(h: str) -> str:
 # Redoslijed je bitan: specifičnija pravila prije općenitijih.
 # Svako pravilo: (polje, [riječi koje sve moraju biti prisutne], [riječi koje ne smiju])
 _HEADER_RULES: list[tuple[str, list[str], list[str]]] = [
-    ("special_price", ["posebn"], []),
-    ("special_price", ["akcij"], []),
+    # "Naziv posebnog oblika prodaje" je tekst (npr. "AKCIJA"), ne cijena
+    ("special_price", ["poseb"], ["naziv"]),        # "poseban", "posebnog"
+    ("special_price", ["akcij"], ["naziv"]),
     ("lowest_30d", ["najniz"], []),
     ("anchor_price", ["sidren"], []),
     ("unit_price", ["cijena", "jedinic"], []),

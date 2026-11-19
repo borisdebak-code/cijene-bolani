@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from ..adapters import Adapter, AdapterError, FormatChanged, RawFile, StorePrices, get_adapter
 from ..geo import normalize_city
-from ..normalize import match_name, normalize_ean, parse_quantity, search_text
+from ..normalize import clean_brand, display_name, match_name, normalize_ean, parse_quantity, search_text
 from . import matching
 
 log = logging.getLogger("cijene.ingest")
@@ -47,20 +47,13 @@ class ChainLog(logging.LoggerAdapter):
 
 # --------------------------------------------------------------------------- #
 
-STG_DDL = """
-CREATE TEMP TABLE IF NOT EXISTS stg (
-    code text, name text, brand text, quantity_raw text, unit_raw text,
-    quantity numeric, unit text, ean text, barcode_raw text, category text,
-    match_name text,
-    regular_price numeric, unit_price numeric, special_price numeric,
-    lowest_30d numeric, anchor_price numeric,
-    cp_id int
-)
-"""
-
-STG_COLS = ("code", "name", "brand", "quantity_raw", "unit_raw", "quantity", "unit", "ean",
-            "barcode_raw", "category", "match_name", "regular_price", "unit_price",
-            "special_price", "lowest_30d", "anchor_price")
+# Privremene tablice za jedan paket (jedan trgovac, jedna ili više poslovnica).
+# stgp = jedan red po artiklu trgovca, stg = jedan red po (poslovnica, artikl).
+STGP_COLS = ("code", "name", "brand", "quantity_raw", "unit_raw", "quantity", "unit", "ean",
+             "barcode_raw", "category", "match_name", "name_display", "search_text")
+STG_COLS = ("store_id", "code", "regular_price", "unit_price", "special_price",
+            "lowest_30d", "anchor_price")
+BATCH_ROWS = int(os.environ.get("INGEST_BATCH_ROWS", "400000"))
 
 
 def ensure_chain(session: Session, code: str) -> int:
@@ -86,8 +79,10 @@ def ensure_store(session: Session, chain_id: int, sp: StorePrices) -> int:
             RETURNING id
             """
         ),
-        {"chain": chain_id, "code": s.code, "name": s.name, "address": s.address,
-         "postcode": s.postcode, "city": normalize_city(s.city, s.postcode)},
+        {"chain": chain_id, "code": s.code[:64], "name": (s.name or "")[:100] or None,
+         "address": (s.address or "")[:200] or None,
+         "postcode": (s.postcode or "")[:10] or None,
+         "city": (normalize_city(s.city, s.postcode) or "")[:100] or None},
     ).scalar_one()
 
 
@@ -108,43 +103,80 @@ def _extend_search_text(session: Session, linked: list[tuple]) -> None:
         """), {"ids": ids, "extras": extras})
 
 
-def _stg_rows(sp: StorePrices) -> list[tuple]:
-    out: dict[str, tuple] = {}
-    for r in sp.rows:
-        ean = normalize_ean(r.barcode)
-        qty, unit = parse_quantity(r.quantity, r.unit, r.name)
-        code = r.code or ean or ("n:" + search_text(r.name, r.quantity, r.unit))[:64]
-        out[code] = (
-            code, r.name[:300], (r.brand or None) and r.brand[:150], (r.quantity or "")[:50] or None,
-            (r.unit or "")[:20] or None, qty, unit, ean, (r.barcode or "")[:200] or None,
-            (r.category or "")[:200] or None, match_name(r.name, r.brand),
-            r.regular_price, r.unit_price, r.special_price, r.lowest_30d, r.anchor_price,
-        )
-    return list(out.values())
+MAX_PRICE = 100_000      # Numeric(10,2); veće je sigurno greška u datoteci (npr. barkod u stupcu cijene)
+MAX_QTY = 10 ** 8
+
+
+def _money(v):
+    return v if v is not None and 0 <= v < MAX_PRICE else None
 
 
 def ingest_store_prices(session: Session, sp: StorePrices, day: date) -> dict:
-    chain_id = ensure_chain(session, sp.chain)
-    store_id = ensure_store(session, chain_id, sp)
-    rows = _stg_rows(sp)
+    return ingest_batch(session, [sp], day)
 
-    session.execute(text(STG_DDL))
-    session.execute(text("TRUNCATE stg"))
+
+def ingest_batch(session: Session, sps: list[StorePrices], day: date) -> dict:
+    """Unesi cjenike više poslovnica *istog* trgovca jednim prolazom."""
+    chain = sps[0].chain
+    assert all(sp.chain == chain for sp in sps), "paket mora biti jedan trgovac"
+    chain_id = ensure_chain(session, chain)
+
+    products: dict[str, tuple] = {}
+    prices: dict[tuple, tuple] = {}
+    for sp in sps:
+        store_id = ensure_store(session, chain_id, sp)
+        for r in sp.rows:
+            regular = _money(r.regular_price)
+            if regular is None:
+                sp.warnings.append(f"neispravna cijena {r.regular_price} ({r.name[:60]})")
+                continue
+            ean = normalize_ean(r.barcode)
+            code = (r.code or ean or "n:" + search_text(r.name, r.quantity, r.unit))[:64]
+            if code not in products:
+                qty, unit = parse_quantity(r.quantity, r.unit, r.name)
+                if qty is not None and qty >= MAX_QTY:
+                    qty, unit = None, None
+                r.brand = clean_brand(r.brand)
+                products[code] = (
+                    code, r.name[:300], (r.brand or None) and r.brand[:150],
+                    (r.quantity or "")[:50] or None, (r.unit or "")[:20] or None, qty, unit, ean,
+                    (r.barcode or "")[:200] or None, (r.category or "")[:200] or None,
+                    match_name(r.name, r.brand), display_name(r.name)[:300],
+                    search_text(r.name, r.brand, ean),
+                )
+            prices[(store_id, code)] = (store_id, code, regular, _money(r.unit_price),
+                                        _money(r.special_price), _money(r.lowest_30d),
+                                        _money(r.anchor_price))
+
+    session.execute(text(
+        """CREATE TEMP TABLE stgp (code text, name text, brand text, quantity_raw text,
+             unit_raw text, quantity numeric, unit text, ean text, barcode_raw text,
+             category text, match_name text, name_display text, search_text text,
+             cp_id int) ON COMMIT DROP"""))
+    session.execute(text(
+        """CREATE TEMP TABLE stg (store_id int, code text, regular_price numeric,
+             unit_price numeric, special_price numeric, lowest_30d numeric,
+             anchor_price numeric) ON COMMIT DROP"""))
     raw = session.connection().connection.driver_connection
     with raw.cursor() as cur:
-        with cur.copy(f"COPY stg ({', '.join(STG_COLS)}) FROM STDIN") as copy:
-            for row in rows:
+        with cur.copy(f"COPY stgp ({', '.join(STGP_COLS)}) FROM STDIN") as copy:
+            for row in products.values():
                 copy.write_row(row)
+        with cur.copy(f"COPY stg ({', '.join(STG_COLS)}) FROM STDIN") as copy:
+            for row in prices.values():
+                copy.write_row(row)
+    session.execute(text("ANALYZE stgp"))
+    session.execute(text("ANALYZE stg"))
 
-    p = {"chain": chain_id, "store": store_id, "d": day}
+    p = {"chain": chain_id, "d": day}
 
-    # 2. chain_product
+    # 2. chain_product (artikl trgovca, njegova šifra)
     session.execute(text(
         """
         INSERT INTO chain_product (chain_id, code, name, brand, quantity_raw, unit_raw,
                                    quantity, unit, ean, barcode_raw, category)
         SELECT :chain, code, name, brand, quantity_raw, unit_raw, quantity, unit, ean,
-               barcode_raw, category FROM stg
+               barcode_raw, category FROM stgp
         ON CONFLICT (chain_id, code) DO UPDATE SET
             name = EXCLUDED.name, brand = EXCLUDED.brand,
             quantity_raw = EXCLUDED.quantity_raw, unit_raw = EXCLUDED.unit_raw,
@@ -158,68 +190,121 @@ def ingest_store_prices(session: Session, sp: StorePrices, day: date) -> dict:
                COALESCE(EXCLUDED.ean, chain_product.ean), EXCLUDED.category)
         """), p)
     session.execute(text(
-        "UPDATE stg SET cp_id = cp.id FROM chain_product cp "
-        "WHERE cp.chain_id = :chain AND cp.code = stg.code"), p)
+        "UPDATE stgp SET cp_id = cp.id FROM chain_product cp "
+        "WHERE cp.chain_id = :chain AND cp.code = stgp.code"), p)
 
-    # 3a. povezivanje po EAN-u (bulk)
+    # 3a. povezivanje po EAN-u s postojećim proizvodom
     newly_linked = session.execute(text(
         """
         UPDATE chain_product cp SET product_id = pr.id, match_method = 'ean'
-        FROM stg, product pr
-        WHERE cp.id = stg.cp_id AND cp.product_id IS NULL
+        FROM stgp s, product pr
+        WHERE cp.id = s.cp_id AND cp.product_id IS NULL
           AND cp.ean IS NOT NULL AND pr.ean = cp.ean
         RETURNING cp.product_id, cp.name, cp.brand
-        """), p).all()
-    linked_ean = len(newly_linked)
+        """)).all()
 
-    # 3b. ostalo: fuzzy ili novi proizvod
+    # 3b. novi EAN-ovi: kanonski proizvod jednim upitom
+    created = session.execute(text(
+        """
+        INSERT INTO product (ean, name, brand, quantity, unit, category, search_text, match_name)
+        SELECT DISTINCT ON (cp.ean) cp.ean, s.name_display, cp.brand, cp.quantity, cp.unit,
+               cp.category, s.search_text, s.match_name
+        FROM stgp s JOIN chain_product cp ON cp.id = s.cp_id
+        WHERE cp.product_id IS NULL AND cp.ean IS NOT NULL
+        ORDER BY cp.ean
+        ON CONFLICT (ean) DO NOTHING
+        """)).rowcount
+    session.execute(text(
+        """
+        UPDATE chain_product cp SET product_id = pr.id, match_method = 'new'
+        FROM stgp s, product pr
+        WHERE cp.id = s.cp_id AND cp.product_id IS NULL
+          AND cp.ean IS NOT NULL AND pr.ean = cp.ean
+        """))
+
+    # 3c. bez EAN-a: fuzzy ili novi proizvod
     unlinked = [
         matching.Unlinked(cp_id=r.cp_id, name=r.name, brand=r.brand, quantity=r.quantity,
                           unit=r.unit, ean=r.ean, category=r.category, match_name=r.match_name)
         for r in session.execute(text(
-            "SELECT stg.cp_id, cp.name, cp.brand, cp.quantity, cp.unit, cp.ean, cp.category, "
-            "stg.match_name FROM stg JOIN chain_product cp ON cp.id = stg.cp_id "
+            "SELECT s.cp_id, cp.name, cp.brand, cp.quantity, cp.unit, cp.ean, cp.category, "
+            "s.match_name FROM stgp s JOIN chain_product cp ON cp.id = s.cp_id "
             "WHERE cp.product_id IS NULL")).all()
     ]
     mstats = matching.link_unlinked(session, chain_id, unlinked)
+    mstats["new"] += created
     _extend_search_text(session, newly_linked + [
         (pid, u.name, u.brand) for u, pid in mstats.pop("linked") if pid is not None])
 
     # 4. intervali cijena
+    session.execute(text(
+        """CREATE TEMP TABLE stp ON COMMIT DROP AS
+           SELECT s.store_id, g.cp_id, s.regular_price, s.unit_price, s.special_price,
+                  s.lowest_30d, s.anchor_price
+           FROM stg s JOIN stgp g USING (code)"""))
+    session.execute(text("ANALYZE stp"))
     same = """(p.regular_price, p.special_price, p.unit_price, p.lowest_30d, p.anchor_price)
               IS NOT DISTINCT FROM
               (s.regular_price, s.special_price, s.unit_price, s.lowest_30d, s.anchor_price)"""
     extended = session.execute(text(
         f"""
-        UPDATE price p SET last_seen = :d FROM stg s
-        WHERE p.is_current AND p.store_id = :store AND p.chain_product_id = s.cp_id
+        UPDATE price p SET last_seen = :d FROM stp s
+        WHERE p.is_current AND p.store_id = s.store_id AND p.chain_product_id = s.cp_id
           AND p.last_seen < :d AND p.last_seen >= CAST(:d AS date) - 3 AND {same}
         """), p).rowcount
     session.execute(text(
         """
-        UPDATE price p SET is_current = false FROM stg s
-        WHERE p.is_current AND p.store_id = :store AND p.chain_product_id = s.cp_id
+        UPDATE price p SET is_current = false FROM stp s
+        WHERE p.is_current AND p.store_id = s.store_id AND p.chain_product_id = s.cp_id
           AND p.last_seen < :d
         """), p)
     inserted = session.execute(text(
         """
         INSERT INTO price (store_id, chain_product_id, valid_from, last_seen, is_current,
                            regular_price, unit_price, special_price, lowest_30d, anchor_price)
-        SELECT :store, s.cp_id, :d, :d, true, s.regular_price, s.unit_price,
+        SELECT s.store_id, s.cp_id, :d, :d, true, s.regular_price, s.unit_price,
                s.special_price, s.lowest_30d, s.anchor_price
-        FROM stg s
+        FROM stp s
         WHERE NOT EXISTS (SELECT 1 FROM price p WHERE p.is_current
-                          AND p.store_id = :store AND p.chain_product_id = s.cp_id)
+                          AND p.store_id = s.store_id AND p.chain_product_id = s.cp_id)
         """), p).rowcount
 
     session.execute(text(
         "UPDATE chain SET last_day = :d WHERE id = :chain AND (last_day IS NULL OR last_day < :d)"), p)
 
-    return {"rows": len(rows), "linked_ean": linked_ean, **mstats,
-            "price_extended": extended, "price_new": inserted}
+    return {"rows": len(prices), "products": len(products), "linked_ean": len(newly_linked),
+            **mstats, "price_extended": extended, "price_new": inserted}
 
 
 # --------------------------------------------------------------------------- #
+
+def refresh_daily(session: Session, chain_code: str, day: date) -> int:
+    """Dnevni sažetak po proizvodu i trgovcu (medijan, min, max, broj
+    poslovnica, akcije) – za graf povijesti i usporedbu bez skeniranja
+    svih cijena po poslovnicama."""
+    p = {"c": chain_code, "d": day}
+    session.execute(text(
+        "DELETE FROM chain_daily WHERE day = :d AND chain_id = (SELECT id FROM chain WHERE code = :c)"), p)
+    return session.execute(text(
+        """
+        INSERT INTO chain_daily (product_id, chain_id, day, price_median, price_min, price_max,
+                                 regular_median, stores, deal_stores)
+        SELECT cp.product_id, cp.chain_id, CAST(:d AS date),
+               percentile_disc(0.5) WITHIN GROUP (ORDER BY LEAST(p.special_price, p.regular_price)),
+               min(LEAST(p.special_price, p.regular_price)),
+               max(LEAST(p.special_price, p.regular_price)),
+               percentile_disc(0.5) WITHIN GROUP (ORDER BY p.regular_price),
+               count(*),
+               count(*) FILTER (WHERE p.special_price IS NOT NULL
+                                OR LEAST(p.special_price, p.regular_price) < p.lowest_30d)
+        FROM price p
+        JOIN chain_product cp ON cp.id = p.chain_product_id
+        JOIN chain c ON c.id = cp.chain_id
+        WHERE c.code = :c AND p.valid_from <= :d AND p.last_seen >= :d
+          AND cp.product_id IS NOT NULL
+        GROUP BY cp.product_id, cp.chain_id
+        """), p).rowcount
+
 
 def _archive(adapter_code: str, day: date, raw: RawFile) -> None:
     if not RAW_ARCHIVE_DIR:
@@ -254,40 +339,62 @@ def run_adapter(session_factory, adapter_code: str, day: date,
 
     stats = {"files_total": 0, "files_failed": 0, "rows_total": 0, "rows_skipped": 0, "stores": 0}
     fatal: str | None = None
+    chains_touched: set[str] = set()
+    batch: list[StorePrices] = []
+    batch_rows = 0
     clog.info("start, dan %s", day)
+
+    def flush() -> None:
+        nonlocal batch, batch_rows
+        if not batch:
+            return
+        try:
+            with session_factory() as s:
+                r = ingest_batch(s, batch, day)
+                for sp in batch:
+                    for w in sp.warnings[:20]:
+                        _record_error(s, run_id, "row", w, sp.source_file)
+                s.commit()
+            stats["rows_total"] += r["rows"]
+            stats["rows_skipped"] += sum(len(sp.warnings) for sp in batch)
+            stats["stores"] += len(batch)
+            chains_touched.add(batch[0].chain)
+            clog.info("%s: %d poslovnica, %d cijena (%s novih proizvoda) – ukupno %d poslovnica",
+                      batch[0].chain, len(batch), r["rows"], r["new"], stats["stores"])
+        except Exception as e:  # noqa: BLE001
+            stats["files_failed"] += len(batch)
+            clog.exception("unos nije uspio: %s (+%d)", batch[0].source_file, len(batch) - 1)
+            with session_factory() as s:
+                for sp in batch:
+                    _record_error(s, run_id, "db", f"{e}", sp.source_file)
+                s.commit()
+        batch, batch_rows = [], 0
 
     try:
         source = files if files is not None else adapter.fetch(day)
         for raw in source:
             stats["files_total"] += 1
             _archive(adapter_code, day, raw)
-            try:
-                parsed = list(adapter.parse(raw))
-            except Exception as e:  # noqa: BLE001
-                stats["files_failed"] += 1
-                kind = "format_changed" if isinstance(e, FormatChanged) else "parse"
-                clog.error("%s: %s – %s", kind, raw.name, e)
-                with session_factory() as s:
-                    _record_error(s, run_id, kind, f"{e}\n{traceback.format_exc(limit=3)}", raw.name)
-                    s.commit()
-                continue
-            for sp in parsed:
+            # parse() je generator – skupljamo poslovnice istog trgovca u pakete
+            it = iter(adapter.parse(raw))
+            while True:
                 try:
-                    with session_factory() as s:
-                        r = ingest_store_prices(s, sp, day)
-                        for w in sp.warnings[:20]:
-                            _record_error(s, run_id, "row", w, sp.source_file)
-                        s.commit()
-                    stats["rows_total"] += r["rows"]
-                    stats["rows_skipped"] += len(sp.warnings)
-                    stats["stores"] += 1
-                    clog.debug("%s: %s", sp.source_file, r)
+                    sp = next(it)
+                except StopIteration:
+                    break
                 except Exception as e:  # noqa: BLE001
                     stats["files_failed"] += 1
-                    clog.exception("unos nije uspio: %s", sp.source_file)
+                    kind = "format_changed" if isinstance(e, FormatChanged) else "parse"
+                    clog.error("%s: %s – %s", kind, raw.name, e)
                     with session_factory() as s:
-                        _record_error(s, run_id, "db", f"{e}", sp.source_file)
+                        _record_error(s, run_id, kind, f"{e}\n{traceback.format_exc(limit=3)}", raw.name)
                         s.commit()
+                    break
+                if batch and (sp.chain != batch[0].chain or batch_rows >= BATCH_ROWS):
+                    flush()
+                batch.append(sp)
+                batch_rows += len(sp.rows)
+        flush()
     except AdapterError as e:
         fatal = str(e)
         clog.error("adapter: %s", e)
@@ -323,6 +430,11 @@ def run_adapter(session_factory, adapter_code: str, day: date,
                WHERE id = :id"""),
             {"st": status, "now": datetime.now(timezone.utc), "err": fatal, "id": run_id, **stats})
         s.commit()
+
+    for chain in sorted(chains_touched):
+        with session_factory() as s:
+            refresh_daily(s, chain, day)
+            s.commit()
 
     level = logging.INFO if status == "ok" else logging.ERROR
     clog.log(level, "kraj: %s %s", status, stats)

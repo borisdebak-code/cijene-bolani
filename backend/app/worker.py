@@ -31,10 +31,31 @@ def today() -> date:
     return datetime.now(TZ).date()
 
 
-def run_all(chains: list[str] | None = None, day: date | None = None) -> list[dict]:
+def configured_chains() -> list[str]:
+    """INGEST_CHAINS=cijenedev,plodine – koji adapteri idu u dnevni posao."""
+    env = [c.strip() for c in os.environ.get("INGEST_CHAINS", "").split(",") if c.strip()]
+    return env or default_adapters()
+
+
+def ok_today(day: date) -> set[str]:
+    from sqlalchemy import text
+
+    with SessionLocal() as s:
+        return {r[0] for r in s.execute(text(
+            "SELECT DISTINCT chain_code FROM ingest_run WHERE day = :d AND status = 'ok'"), {"d": day})}
+
+
+def run_all(chains: list[str] | None = None, day: date | None = None,
+            only_missing: bool = False) -> list[dict]:
     day = day or today()
+    chains = chains or configured_chains()
+    if only_missing:
+        chains = [c for c in chains if c not in ok_today(day)]
+        if not chains:
+            return []
+        log.info("Ponovni pokušaj za: %s", ", ".join(chains))
     results = []
-    for code in chains or default_adapters():
+    for code in chains:
         # svaki trgovac zasebno – greška jednoga ne zaustavlja ostale
         results.append({"chain": code, **run_adapter(SessionLocal, code, day)})
     failed = [r["chain"] for r in results if r["status"] != "ok"]
@@ -53,6 +74,14 @@ def schedule() -> None:
     sched = BlockingScheduler(timezone=TZ)
     sched.add_job(run_all, CronTrigger(hour=int(hour), minute=int(minute), timezone=TZ),
                   id="daily_ingest", max_instances=1, coalesce=True, misfire_grace_time=3600)
+    # neki trgovci (i cijene.dev arhiva) objave cjenik kasnije – ponavljaj svaki sat
+    # do RETRY_UNTIL samo za one koji danas još nisu uspjeli
+    until = int(os.environ.get("RETRY_UNTIL_HOUR", "14"))
+    if until > int(hour):
+        sched.add_job(run_all, CronTrigger(hour=f"{int(hour) + 1}-{until}", minute=int(minute),
+                                           timezone=TZ),
+                      kwargs={"only_missing": True}, id="retry_ingest", max_instances=1,
+                      coalesce=True, misfire_grace_time=1800)
     log.info("Zakazano dnevno preuzimanje u %s:%s (%s)", hour, minute, TZ)
     if os.environ.get("INGEST_ON_START", "").lower() in {"1", "true", "yes"}:
         run_all()

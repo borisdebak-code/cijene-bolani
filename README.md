@@ -1,33 +1,63 @@
 # Cijene HR
 
 Usporedba cijena proizvoda u trgovinama u Hrvatskoj. Podaci dolaze iz **službenih
-dnevnih cjenika** (CSV/XML) koje trgovci moraju objavljivati (Odluka NN 101/2026,
-ranije NN 75/2025). HTML stranice proizvoda se ne scrapaju.
+dnevnih cjenika** (CSV/XML) koje trgovci moraju objavljivati (Odluka NN 75/2025).
+HTML stranice proizvoda se ne scrapaju.
 
-**Trgovci:** Konzum, Lidl, Plodine, Kaufland, Spar i Interspar (+ opcionalno cijene.dev arhiva) · pretraga po nazivu
-ili barkodu · usporedba po trgovcima/poslovnicama s filtrom po gradu · graf povijesti
-cijene · stranica "Stanje preuzimanja" po adapteru.
+**Trgovci:** Konzum, Lidl, Kaufland, Spar, Interspar, Plodine.
 
-## Pokretanje
+**Za korisnike** (javni način, `PUBLIC_MODE=true`):
+- pretraga s padajućim izbornikom konkretnih proizvoda (naziv ili barkod)
+- usporedba po trgovcima: uobičajena cijena (medijan po poslovnicama, s akcijama), raspon, akcije
+- graf povijesti cijene
+- **popis za kupnju** (gumb u donjem desnom kutu): za svaki proizvod najjeftinija trgovina,
+  popis podijeljen po trgovinama (s gumbom za kopiranje svakog popisa) i usporedba
+  "sve u jednoj trgovini". Popis se čuva samo u korisnikovom pregledniku.
+
+Ništa drugo korisnik ne može mijenjati; administracija (`/api/status`, `/docs`) je u javnom
+načinu isključena.
+
+## Izvori podataka
+
+| trgovac | izvor | napomena |
+|---|---|---|
+| Konzum, Lidl, Kaufland, Spar, Interspar | `cijenedev` adapter (dnevna arhiva api.cijene.dev) | Spar hipermarketi = Interspar |
+| Plodine | `plodine` adapter (izravno s plodine.hr) | nije u cijene.dev arhivi |
+
+Izravni adapteri za Konzum, Kaufland i Spar/Interspar rade i provjereni su na stvarnim
+datotekama (`tests/fixtures/*/real/`); Lidlova stranica trenutno ne objavljuje linkove na
+aktualne cjenike, pa Lidl ide preko cijene.dev. Izvori se biraju s `INGEST_CHAINS` i
+`CIJENEDEV_CHAINS` u `.env`.
+
+## Pokretanje (server, npr. VPS)
 
 ```bash
 cp .env.example .env          # promijeni POSTGRES_PASSWORD
 docker compose up -d --build
+docker compose exec worker python -m app.worker once            # prvo preuzimanje odmah
+docker compose exec worker python /srv/scripts/backfill_daily.py --days 30   # povijest za graf
 ```
 
-- web: http://localhost:8000 · API dokumentacija: http://localhost:8000/docs
-- worker preuzima cjenike svaki dan u **08:30 (Europe/Zagreb)** (`INGEST_AT`)
+- web: http://<server>:8000 (za javni pristup stavi ispred nginx/Caddy s HTTPS-om)
+- worker preuzima cjenike svaki dan u **08:30 (Europe/Zagreb)**, a do 14:30 svaki sat ponovno
+  pokušava za trgovce čiji cjenik još nije bio objavljen
 
 ```bash
-docker compose exec worker python -m app.worker once                     # odmah, svi trgovci
-docker compose exec worker python -m app.worker once --chains lidl --date 2026-11-18
-docker compose exec worker python -m app.worker once --chains cijenedev  # brzi početak iz arhive
+docker compose exec worker python -m app.worker once --chains plodine --date 2026-11-18
 docker compose exec worker python -m app.worker load plodine /data/raw/cjenik.zip
 docker compose exec worker python -m app.worker list
-docker compose exec api python /srv/scripts/seed_demo.py --days 60        # demo podaci (bez mreže)
-docker compose exec api pytest -q                                         # testovi
+docker compose exec api pytest -q
 ```
 
+## Statična verzija (bez servera)
+
+```bash
+cd backend && python ../scripts/export_static.py ../site
+```
+
+`site/` je potpuna aplikacija u statičnim datotekama (indeks za pretragu + podaci po
+proizvodu u 128 dijelova koji se učitavaju na zahtjev). Može se postaviti na bilo koji
+statični hosting. S `--artifact` se izvozi kao claude.ai stranica.
 
 ## Arhitektura
 
@@ -42,9 +72,11 @@ backend/app/
   geo.py               gradovi: poštanski broj → grad, kratice (V.GORICA → Velika Gorica)
   normalize.py         EAN (checksum, UPC→EAN-13, odbacuje interne 2xx kodove),
                        količina → g/ml/kom, tekst za pretragu
-  services/ingest.py   COPY u staging tablicu → chain_product → product → intervali cijena
+  services/ingest.py   paket poslovnica istog trgovca → COPY u staging → chain_product →
+                       product → intervali cijena → dnevni sažetak (chain_daily)
   services/matching.py spajanje: EAN, pa fuzzy (pg_trgm + rapidfuzz) uz istu količinu i marku
-  api/routes.py        /api/search, /api/products/{id}[/prices|/history], /api/cities, /api/status
+  api/routes.py        /api/suggest, /api/products/{id}/summary (javno), /api/search,
+                       /api/products/{id}/prices|history, /api/cities, /api/status (admin)
   worker.py            APScheduler (dnevno 08:30) + CLI
 frontend/              statični responzivni web (vanilla JS, Chart.js lokalno)
 ```
@@ -58,6 +90,7 @@ frontend/              statični responzivni web (vanilla JS, Chart.js lokalno)
 | `product` | kanonski proizvod (EAN, naziv, marka, količina, jedinica, kategorija) |
 | `chain_product` | artikl kod trgovca (njegova šifra) → `product_id`, `match_method` = ean/fuzzy/new |
 | `price` | MPC, cijena/JM, akcijska cijena, najniža 30 d, sidrena; **interval** `valid_from`–`last_seen` |
+| `chain_daily` | dnevni sažetak po proizvodu i trgovcu: medijan, min, max, broj poslovnica, akcije |
 | `ingest_run`, `ingest_error` | log po trgovcu/danu i po datoteci |
 
 **Povijest se ne prepisuje.** Ako je cijena ista kao jučer, produžuje se `last_seen`;

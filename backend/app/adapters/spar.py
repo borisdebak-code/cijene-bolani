@@ -61,9 +61,15 @@ class SparAdapter(Adapter):
             parts.pop()
         if parts and re.fullmatch(r"\d{8}", parts[-1]):      # YYYYMMDD
             parts.pop()
-        code = parts.pop() if parts and parts[-1].isdigit() else stem
+        tail_code = parts.pop() if parts and parts[-1].isdigit() else None
         # odreži naziv poslovnice od "spar"/"interspar" nadalje
         cut = next((i for i, p in enumerate(parts) if p.lower() in {"spar", "interspar"}), len(parts))
+        # šifra poslovnice je broj neposredno ispred "spar"/"interspar" (npr. 8701);
+        # zadnji broj u imenu datoteke nije jedinstven po poslovnici
+        if 0 < cut < len(parts) and parts[cut - 1].isdigit():
+            code = parts[cut - 1]
+        else:
+            code = tail_code or stem
         kind, body = (parts[0], parts[1:cut]) if parts else (None, [])
         # interni broj (4+ znamenke) ispred naziva nije dio adrese
         while body and re.fullmatch(r"\d{4,}", body[-1]):

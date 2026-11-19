@@ -12,7 +12,7 @@ from app.adapters.base import RawFile, unpack
 def load(fixtures, chain):
     adapter = get_adapter(chain)()
     files = []
-    for p in sorted((fixtures / chain).iterdir()):
+    for p in sorted(x for x in (fixtures / chain).iterdir() if x.is_file()):
         files.extend(adapter.prepare(p.name, p.read_bytes()))
     return [sp for f in files for sp in adapter.parse(f)]
 
@@ -123,7 +123,7 @@ def test_kaufland_tab_and_short_headers(fixtures):
 
 def test_spar_and_interspar(fixtures):
     sps = {sp.store.code: sp for sp in load(fixtures, "spar")}
-    vg, zg = sps["0034"], sps["0102"]
+    vg, zg = sps["8740"], sps["8102"]
     assert (vg.chain, vg.store.city, vg.store.address) == \
         ("interspar", "Velika Gorica", "Zagrebacka Ulica 1")
     assert (zg.chain, zg.store.city, zg.store.address) == ("spar", "Zagreb", "Ilica 250")
@@ -157,3 +157,22 @@ def test_kaufland_discover_via_asset_json():
     })
     assert get_adapter("kaufland")(c).discover(date(2026, 11, 19)) == [
         "https://www.kaufland.hr/files/Hipermarket_Velika_Gorica_X_4630_19112026_7-30.csv"]
+
+
+def test_spar_real_filename_store_code():
+    from app.adapters.spar import SparAdapter
+
+    s = SparAdapter.store_from_filename(
+        "hipermarket_zadar_bleiburskih_zrtava_18_8701_interspar_8701_zd_bleib._0567_20261119_0330.csv")
+    assert (s.code, s.city, s.address) == ("8701", "Zadar", "Bleiburskih Zrtava 18")
+
+
+def test_konzum_new_header_text_column_ignored():
+    from app.adapters.csvutil import map_headers
+
+    h = ("NAZIV PROIZVODA,ŠIFRA PROIZVODA,MARKA PROIZVODA,NETO KOLIČINA,JEDINICA MJERE,"
+         "MALOPRODAJNA CIJENA,POSEBAN OBLIK PRODAJE,NAZIV POSEBNOG OBLIKA PRODAJE,"
+         "CIJENA ZA JEDINICU MJERE,BARKOD,BAZNA CIJENA").split(",")
+    m = map_headers(h)
+    assert (m["special_price"], m["unit_price"], m["barcode"]) == (6, 8, 9)
+    assert 7 not in m.values()

@@ -63,30 +63,51 @@ _QTY = re.compile(
 )
 
 
+def _from_text(text: str) -> tuple[Decimal, str] | None:
+    for m in _QTY.finditer(text):
+        uu = m["unit"].lower()
+        if uu in _UNIT_ALIASES:
+            base, factor = _UNIT_ALIASES[uu]
+            n = parse_decimal(m["num"])
+            if n is None or n == 0:
+                continue
+            mult = int(m["mult"]) if m["mult"] else 1
+            return (n * factor * mult).normalize(), base
+    return None
+
+
 def parse_quantity(quantity: str | None, unit: str | None = None,
                    name: str | None = None) -> tuple[Decimal | None, str | None]:
     """('0,5', 'l') -> (500, 'ml'); ('500 g', None) -> (500, 'g');
     ('6x0,33 l') -> (1980, 'ml'). Ako polja nisu dovoljna, pokušaj iz naziva."""
     q = (quantity or "").strip().lower()
     u = strip_accents((unit or "").strip().lower()).rstrip(".")
+    # cijene.dev: "g (1kg)", "ml (1 L)" – količina je izražena u jedinici iz zagrade
+    m = re.match(r"^[a-z]+\s*\(\s*\d*\s*([a-z]+)\s*\)$", u)
+    if m:
+        u = m.group(1)
+    # Kaufland i sl.: jedinica "KOM", a količina u kg – naziv ("460g") je pouzdaniji
+    if u in {"kom", "ko", "kos", ""}:
+        from_name = _from_text(strip_accents((name or "").lower()))
+        if from_name and from_name[1] in {"g", "ml"}:
+            return from_name
+    if u == "ko":
+        u = "kom"
 
     # 1) količina i jedinica u odvojenim stupcima
     num = parse_decimal(q) if re.fullmatch(r"[\d.,\s]+", q or "x") else None
     if num is not None and u in _UNIT_ALIASES:
         base, factor = _UNIT_ALIASES[u]
+        # "0,02 kom" je zapravo težina u kg uz krivu jedinicu – ne znamo količinu
+        if base == "kom" and num < 1:
+            return _from_text(strip_accents((name or "").lower())) or (None, None)
         return (num * factor).normalize(), base
 
     # 2) "500 g", "6x0,33l" u stupcu količine, pa u nazivu
     for text in (q, strip_accents((name or "").lower())):
-        for m in _QTY.finditer(text):
-            uu = m["unit"].lower()
-            if uu in _UNIT_ALIASES:
-                base, factor = _UNIT_ALIASES[uu]
-                n = parse_decimal(m["num"])
-                if n is None:
-                    continue
-                mult = int(m["mult"]) if m["mult"] else 1
-                return (n * factor * mult).normalize(), base
+        found = _from_text(text)
+        if found:
+            return found
 
     if num is not None and not u:
         return num.normalize(), None
@@ -98,6 +119,13 @@ def parse_quantity(quantity: str | None, unit: str | None = None,
 # --------------------------------------------------------------------------- #
 # Tekst
 # --------------------------------------------------------------------------- #
+
+def clean_brand(brand: str | None) -> str | None:
+    """Neki trgovci umjesto prazne marke pišu '#', '-', '.'."""
+    if not brand or not re.search(r"[0-9A-Za-zČĆŽŠĐčćžšđ]", brand):
+        return None
+    return brand.strip()
+
 
 def search_text(*parts: str | None) -> str:
     s = " ".join(p for p in parts if p)
@@ -112,11 +140,16 @@ _NOISE = re.compile(r"\b\d+(?:[.,]\d+)?\s*(?:x\s*\d+(?:[.,]\d+)?)?\s*(?:g|gr|kg|
 def match_name(name: str, brand: str | None) -> str:
     """Naziv za fuzzy usporedbu: bez količina, marke i interpunkcije."""
     s = search_text(name)
-    s = _NOISE.sub(" ", s)
+    s = re.sub(r"\s+", " ", _NOISE.sub(" ", s)).strip()
     if brand:
+        without = s
         for tok in search_text(brand).split():
-            s = re.sub(rf"\b{re.escape(tok)}\b", " ", s)
-    return re.sub(r"\s+", " ", s).strip()
+            without = re.sub(rf"\b{re.escape(tok)}\b", " ", without)
+        without = re.sub(r"\s+", " ", without).strip()
+        # "Nutella 400g" (marka Nutella) – bez marke ne bi ostalo ništa
+        if without:
+            s = without
+    return s
 
 
 def display_name(s: str) -> str:

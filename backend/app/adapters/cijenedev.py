@@ -32,6 +32,20 @@ class CijeneDevAdapter(Adapter):
     enabled_by_default = False
     unpack_zip = False
     base_url = os.environ.get("CIJENEDEV_BASE_URL", "https://api.cijene.dev")
+    #: koje trgovce iz arhive uvesti (prazno = sve)
+    chains = [c for c in os.environ.get("CIJENEDEV_CHAINS", "").split(",") if c]
+
+    def __init__(self, client=None, chains: list[str] | None = None):
+        super().__init__(client)
+        if chains is not None:
+            self.chains = chains
+
+    @staticmethod
+    def chain_for_store(chain: str, store_type: str | None) -> str:
+        # Spar Hrvatska: hipermarketi posluju kao Interspar
+        if chain == "spar" and (store_type or "").lower().startswith("hiper"):
+            return "interspar"
+        return chain
 
     def discover(self, day: date) -> list[str]:
         r = self.get(f"{self.base_url}/v0/list")
@@ -52,46 +66,50 @@ class CijeneDevAdapter(Adapter):
             if not by_chain:
                 raise FormatChanged("cijene.dev arhiva nema očekivanu strukturu <chain>/*.csv")
             for chain, files in sorted(by_chain.items()):
+                if self.chains and chain not in self.chains:
+                    continue
                 if len(files) < 3:
                     raise FormatChanged(f"cijene.dev/{chain}: nedostaju datoteke, ima {sorted(files)}")
-                yield from self._parse_chain(chain, {k: zf.read(v) for k, v in files.items()})
+                yield from self._parse_chain(chain, zf, files)
 
     @staticmethod
     def _rows(data: bytes) -> list[dict[str, str]]:
         text, _ = decode_bytes(data)
         return list(csv.DictReader(io.StringIO(text)))
 
-    def _parse_chain(self, chain: str, files: dict[str, bytes]):
-        stores = {s["store_id"]: s for s in self._rows(files["stores.csv"])}
-        products = {p["product_id"]: p for p in self._rows(files["products.csv"])}
+    def _parse_chain(self, chain: str, zf, files: dict[str, str]):
+        stores = {s["store_id"]: s for s in self._rows(zf.read(files["stores.csv"]))}
+        products = {p["product_id"]: p for p in self._rows(zf.read(files["products.csv"]))}
         per_store: dict[str, list[PriceRow]] = defaultdict(list)
-        for p in self._rows(files["prices.csv"]):
-            prod = products.get(p.get("product_id", ""))
-            if not prod:
-                continue
-            regular = parse_decimal(p.get("price"))
-            special = parse_decimal(p.get("special_price"))
-            if regular is None and special is None:
-                continue
-            per_store[p["store_id"]].append(PriceRow(
-                code=prod["product_id"],
-                name=prod.get("name") or "",
-                brand=prod.get("brand") or None,
-                quantity=prod.get("quantity") or None,
-                unit=prod.get("unit") or None,
-                barcode=prod.get("barcode") or None,
-                category=prod.get("category") or None,
-                regular_price=regular if regular is not None else special,
-                unit_price=parse_decimal(p.get("unit_price")),
-                special_price=special if special != regular else None,
-                lowest_30d=parse_decimal(p.get("best_price_30")),
-                anchor_price=parse_decimal(p.get("anchor_price")),
-            ))
+        # prices.csv zna imati stotine MB – čitamo u streamu
+        with zf.open(files["prices.csv"]) as fh:
+            for p in csv.DictReader(io.TextIOWrapper(fh, encoding="utf-8-sig", newline="")):
+                prod = products.get(p.get("product_id", ""))
+                if not prod:
+                    continue
+                regular = parse_decimal(p.get("price"))
+                special = parse_decimal(p.get("special_price"))
+                if regular is None and special is None:
+                    continue
+                per_store[p["store_id"]].append(PriceRow(
+                    code=prod["product_id"],
+                    name=prod.get("name") or "",
+                    brand=prod.get("brand") or None,
+                    quantity=prod.get("quantity") or None,
+                    unit=prod.get("unit") or None,
+                    barcode=prod.get("barcode") or None,
+                    category=prod.get("category") or None,
+                    regular_price=regular if regular is not None else special,
+                    unit_price=parse_decimal(p.get("unit_price")),
+                    special_price=special if special != regular else None,
+                    lowest_30d=parse_decimal(p.get("best_price_30")),
+                    anchor_price=parse_decimal(p.get("anchor_price")),
+                ))
         for store_id, rows in per_store.items():
             s = stores.get(store_id, {})
             yield StorePrices(
-                chain=chain,
-                store=StoreInfo(code=store_id, name=s.get("type") or None,
+                chain=self.chain_for_store(chain, s.get("type")),
+                store=StoreInfo(code=store_id, name=(s.get("type") or "").title() or None,
                                 address=s.get("address") or None,
                                 postcode=s.get("zipcode") or None, city=s.get("city") or None),
                 rows=rows,
