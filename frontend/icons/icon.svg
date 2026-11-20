@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#0b6e4f"/>
+  <rect x="36" y="36" width="440" height="440" rx="88" fill="#ffffff"/>
+  <text x="256" y="334" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif"
+        font-weight="900" font-size="236" letter-spacing="-12">
+    <tspan fill="#15191a">B</tspan><tspan fill="#d0202a">L</tspan></text>
+  <text x="256" y="412" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif"
+        font-weight="800" font-size="54" fill="#0b6e4f" letter-spacing="6">CIJENE</text>
+</svg>

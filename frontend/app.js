@@ -675,6 +675,37 @@ document.addEventListener("click", (e) => {
 $("#search-form").addEventListener("submit", (e) => e.preventDefault());
 
 // ===================================================================== views
+// ---- instalacija kao aplikacija (PWA)
+let installEvt = null;
+const standalone = () => window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone;
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installEvt = e; showInstall(); });
+window.addEventListener("appinstalled", () => { installEvt = null; showInstall(); toast("Aplikacija je instalirana"); });
+
+function installHTML() {
+  if (!STATIC?.pwa || standalone()) return "";
+  if (installEvt) return `<div class="install"><div><strong>Instaliraj aplikaciju</strong>
+      <span class="muted small">Ikona na početnom zaslonu, otvara se kao prava aplikacija.</span></div>
+      <button class="primary sm" id="install-btn">Instaliraj</button></div>`;
+  if (isIOS) return `<div class="install"><div><strong>Dodaj na početni zaslon</strong>
+      <span class="muted small">U Safariju dodirni <b>Dijeli</b> (kvadrat sa strelicom) pa <b>Dodaj na početni zaslon</b>.</span></div></div>`;
+  return "";
+}
+function showInstall() {
+  const box = $("#install-slot");
+  if (!box) return;
+  box.innerHTML = installHTML();
+  $("#install-btn")?.addEventListener("click", async () => {
+    if (!installEvt) return;
+    installEvt.prompt();
+    await installEvt.userChoice.catch(() => null);
+    installEvt = null; showInstall();
+  });
+}
+if (STATIC?.pwa && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+}
+
 let CATS = null;
 async function categories() { if (!CATS) CATS = await data.categories(); return CATS; }
 
@@ -684,8 +715,10 @@ async function renderHome(meta) {
       <h1>Gdje je najjeftinije?</h1>
       <p class="muted">Upiši proizvod ili barkod gore, ili ga pronađi po kategorijama kao u katalogu.</p>
     </section>
+    <div id="install-slot"></div>
     <div id="cats" class="cat-grid" aria-label="Kategorije"><p class="muted">Učitavam kategorije…</p></div>
     ${meta?.updated ? `<p class="muted small">Cijene ažurirane: ${esc(fmtDate(meta.updated))}</p>` : ""}`;
+  showInstall();
   let cats;
   try { cats = await categories(); } catch { $("#cats").innerHTML = ""; return; }
   if (!$("#cats")) return;

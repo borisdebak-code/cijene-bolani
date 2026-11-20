@@ -87,6 +87,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, default=ROOT / "site")
     ap.add_argument("--skip-export", action="store_true")
+    ap.add_argument("--standalone", action="store_true",
+                    help="izvoz za GitHub Pages / statični hosting (instalabilna aplikacija), ne claude.ai")
     args = ap.parse_args()
     setup_logging()
     init_db()
@@ -99,8 +101,10 @@ def main() -> int:
     summary["last_day"] = {k: str(v) for k, v in sorted(last_days().items())}
     ok = True
     if not args.skip_export:
-        r = subprocess.run([sys.executable, str(ROOT / "scripts/export_static.py"), str(args.out), "--artifact"],
-                           capture_output=True, text=True)
+        cmd = [sys.executable, str(ROOT / "scripts/export_static.py"), str(args.out)]
+        if not args.standalone:
+            cmd.append("--artifact")
+        r = subprocess.run(cmd, capture_output=True, text=True)
         summary["export"] = (r.stdout.strip() or r.stderr.strip()[-500:])
         ok = r.returncode == 0
         if ok:

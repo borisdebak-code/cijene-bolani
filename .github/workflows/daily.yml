@@ -1,0 +1,111 @@
+name: Dnevno osvježavanje cijena
+
+# Svaki dan u 8:00 po hrvatskom vremenu: preuzme službene cjenike, unese ih, složi
+# stranicu (instalabilna aplikacija) i objavi je na GitHub Pages.
+# GitHub cron radi u UTC-u, pa postoje dva pokretanja (ljetno i zimsko vrijeme);
+# korak "gate" pusti samo ono koje je u 8 h ili kasnije po Zagrebu.
+on:
+  schedule:
+    - cron: "0 6 * * *"
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+    inputs:
+      backfill_days:
+        description: "Povijest za graf: koliko prethodnih dana dopuniti iz cijene.dev arhiva (0 = ništa)"
+        default: "0"
+
+permissions:
+  contents: write     # spremanje stanja baze u GitHub Release
+  pages: write
+  id-token: write
+
+concurrency:
+  group: daily-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: pg
+          POSTGRES_DB: cijene
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 20
+          --shm-size=1g
+    env:
+      PGURL: postgresql://postgres:pg@localhost:5432/cijene
+      DATABASE_URL: postgresql+psycopg://postgres:pg@localhost:5432/cijene
+      CIJENEDEV_CHAINS: konzum,lidl,kaufland,spar
+      GH_TOKEN: ${{ github.token }}
+      LOG_LEVEL: WARNING
+      TZ: Europe/Zagreb
+    steps:
+      - name: Samo u 8 h ili kasnije po hrvatskom vremenu
+        id: gate
+        run: |
+          h=$(TZ=Europe/Zagreb date +%H)
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$h" -lt 8 ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "Zagreb $h h – preskačem (ljetno/zimsko vrijeme)."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.run == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Ovisnosti
+        if: steps.gate.outputs.run == 'true'
+        run: pip install -r backend/requirements.txt
+
+      - name: Vrati stanje baze
+        if: steps.gate.outputs.run == 'true'
+        run: bash scripts/ci_state.sh restore
+
+      - name: Preuzmi i unesi nove cjenike
+        if: steps.gate.outputs.run == 'true'
+        working-directory: backend
+        run: python ../scripts/daily_refresh.py --out ../site --skip-export
+
+      - name: Dopuni povijest (samo kad je zatraženo)
+        if: steps.gate.outputs.run == 'true' && github.event.inputs.backfill_days != '' && github.event.inputs.backfill_days != '0'
+        working-directory: backend
+        run: python -u ../scripts/backfill_daily.py --days "${{ github.event.inputs.backfill_days }}"
+
+      - name: Složi stranicu
+        if: steps.gate.outputs.run == 'true'
+        working-directory: backend
+        run: python ../scripts/export_static.py ../site
+
+      - name: Spremi stanje baze
+        if: steps.gate.outputs.run == 'true'
+        run: bash scripts/ci_state.sh save
+
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.gate.outputs.run == 'true'
+        with:
+          path: site
+
+  deploy:
+    needs: refresh
+    if: needs.refresh.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -45,6 +45,28 @@ datotekama (`tests/fixtures/*/real/`); Lidlova stranica trenutno ne objavljuje l
 aktualne cjenike, pa Lidl ide preko cijene.dev. Izvori se biraju s `INGEST_CHAINS` i
 `CIJENEDEV_CHAINS` u `.env`.
 
+## Besplatna objava: GitHub Pages + GitHub Actions (preporučeno za obitelj i prijatelje)
+
+Aplikacija se objavljuje kao statična stranica koja se može **instalirati kao aplikacija**
+(PWA), a cijene se osvježavaju same, bez servera i bez troška (javni repozitorij).
+
+- `.github/workflows/daily.yml` – svaki dan u **8:00 po hrvatskom vremenu**: vrati sažetu
+  bazu iz GitHub Releasea `state`, preuzme nove službene cjenike, složi stranicu i objavi je
+  na GitHub Pages, pa spremi novo stanje (`scripts/ci_state.sh`).
+- `.github/workflows/tests.yml` – testovi kod svake promjene.
+
+**Jednokratno postavljanje**
+1. Settings → Pages → *Build and deployment* → Source: **GitHub Actions**.
+2. Actions → *Dnevno osvježavanje cijena* → **Run workflow**, `backfill_days` = `30`
+   (prvo pokretanje obnovi i povijest cijena za graf; traje ~1 h).
+3. Adresa aplikacije: `https://<korisnik>.github.io/<repozitorij>/`
+
+**Instalacija na mobitel**
+- Android (Chrome): otvori link → gumb **Instaliraj** na početnoj (ili izbornik ⋮ → *Instaliraj aplikaciju*).
+- iPhone (Safari): otvori link → **Dijeli** → **Dodaj na početni zaslon**.
+
+Nakon prvog otvaranja aplikacija radi i bez mreže (sa zadnjim preuzetim cijenama).
+
 ## Pokretanje (server, npr. VPS)
 
 ```bash

@@ -141,6 +141,11 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .shop-pick select { font: inherit; font-size: 13px; color: var(--text); background: var(--bg);
   border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; max-width: 100%; }
 
+/* ---------- instalacija aplikacije */
+.install { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin: 6px 0 4px;
+  padding: 12px 14px; border-radius: var(--radius); background: var(--accent-soft); border: 1px solid var(--line); }
+.install > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+
 /* ---------- kategorije (kao u katalozima) */
 .cat-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 18px 0 24px; }
 .cat-tile {

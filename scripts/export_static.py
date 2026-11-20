@@ -14,6 +14,7 @@ Rezultat:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
@@ -150,6 +151,13 @@ def main() -> None:
         shutil.copy(FE / "vendor" / "chart.umd.js", out / "vendor" / "chart.umd.js")
         shutil.copy(FE / "style.css", out / "style.css")
         shutil.copy(FE / "app.js", out / "app.js")
+        # instalabilna aplikacija (PWA): manifest, ikone, servisni radnik
+        shutil.copy(FE / "manifest.webmanifest", out / "manifest.webmanifest")
+        shutil.copytree(FE / "icons", out / "icons", dirs_exist_ok=True)
+        build = hashlib.sha1((js + css + str(updated)).encode()).hexdigest()[:10]
+        (out / "sw.js").write_text((FE / "sw.js").read_text().replace("__BUILD__", build))
+        (out / ".nojekyll").write_text("")
+        boot = 'window.CIJENE_STATIC = { base: "data/", pwa: true };'
         page = (html.replace("/static/", "")
                 .replace('<script src="app.js" defer></script>',
                          f'<script>{boot}</script>\n  <script src="app.js" defer></script>'))
