@@ -91,6 +91,8 @@ class Adapter(ABC):
     enabled_by_default: ClassVar[bool] = True
     #: raspakirati ZIP prije parse()? (False ako adapter treba cijelu arhivu)
     unpack_zip: ClassVar[bool] = True
+    #: upozori ako je redaka < 50 % prošlog uspješnog preuzimanja (promjena formata?)
+    row_drop_check: ClassVar[bool] = True
 
     user_agent = "cijene-hr/0.1 (+price comparison; official price lists)"
     timeout = httpx.Timeout(60.0, connect=15.0)

@@ -31,6 +31,9 @@ class CijeneDevAdapter(Adapter):
     name = "cijene.dev (arhiva)"
     enabled_by_default = False
     unpack_zip = False
+    # broj trgovaca u jednom pokretanju varira (arhiva se puni tijekom dana), pa
+    # usporedba broja redaka s prošlim pokretanjem nema smisla
+    row_drop_check = False
     base_url = os.environ.get("CIJENEDEV_BASE_URL", "https://api.cijene.dev")
     #: koje trgovce iz arhive uvesti (prazno = sve)
     chains = [c for c in os.environ.get("CIJENEDEV_CHAINS", "").split(",") if c]

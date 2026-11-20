@@ -470,7 +470,8 @@ def run_adapter(session_factory, adapter_code: str, day: date,
             fatal = f"{stats['files_failed']}/{stats['files_total']} datoteka nije uspjelo"
         else:
             status = "ok"
-        if status != "failed" and prev and stats["rows_total"] < prev * ROW_DROP_ALERT:
+        if (status != "failed" and adapter.row_drop_check and prev
+                and stats["rows_total"] < prev * ROW_DROP_ALERT):
             status = "partial"
             fatal = (f"Broj redaka pao s {prev} na {stats['rows_total']} – "
                      "moguća promjena formata ili nepotpun cjenik")
