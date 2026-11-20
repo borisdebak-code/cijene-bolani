@@ -42,7 +42,6 @@ jobs:
     env:
       PGURL: postgresql://postgres:pg@localhost:5432/cijene
       PGURL_INNER: postgresql://postgres:pg@localhost:5432/cijene   # unutar Postgres spremnika
-      PG_CONTAINER: ${{ job.services.postgres.id }}
       DATABASE_URL: postgresql+psycopg://postgres:pg@localhost:5432/cijene
       CIJENEDEV_CHAINS: konzum,lidl,kaufland,spar
       GH_TOKEN: ${{ github.token }}
@@ -75,6 +74,8 @@ jobs:
 
       - name: Vrati stanje baze
         if: steps.gate.outputs.run == 'true'
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
         run: bash scripts/ci_state.sh restore
 
       - name: Preuzmi i unesi nove cjenike
@@ -94,6 +95,8 @@ jobs:
 
       - name: Spremi stanje baze
         if: steps.gate.outputs.run == 'true'
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
         run: bash scripts/ci_state.sh save
 
       - uses: actions/upload-pages-artifact@v3
