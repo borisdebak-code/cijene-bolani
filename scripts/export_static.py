@@ -134,7 +134,7 @@ def main() -> None:
     js = (FE / "app.js").read_text()
     boot = 'window.CIJENE_STATIC = { base: "data/" };'
     if args.artifact:
-        page = (f'<title>Cijene HR</title>\n<meta name="claude:viewport-fit-sides" content="cover">\n'
+        page = (f'<title>Cijene BoLaNI</title>\n<meta name="claude:viewport-fit-sides" content="cover">\n'
                 f"<style>\n{css}\n</style>\n<script src=\"{CHART_CDN}\"></script>\n{body}\n"
                 f"<script>\n{boot}\n{js}\n</script>\n")
     else:

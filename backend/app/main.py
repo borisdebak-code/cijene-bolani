@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
 PUBLIC_MODE = os.environ.get("PUBLIC_MODE", "").lower() in {"1", "true", "yes"}
 
 # u javnom načinu nema API dokumentacije ni administracije
-app = FastAPI(title="Cijene HR", version="0.2.0", lifespan=lifespan,
+app = FastAPI(title="Cijene BoLaNI", version="0.2.0", lifespan=lifespan,
               docs_url=None if PUBLIC_MODE else "/docs",
               redoc_url=None, openapi_url=None if PUBLIC_MODE else "/openapi.json")
 app.include_router(router)

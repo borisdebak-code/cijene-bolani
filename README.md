@@ -1,4 +1,4 @@
-# Cijene HR
+# Cijene BoLaNI
 
 Usporedba cijena proizvoda u trgovinama u Hrvatskoj. Podaci dolaze iz **službenih
 dnevnih cjenika** (CSV/XML) koje trgovci moraju objavljivati (Odluka NN 75/2025).

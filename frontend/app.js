@@ -1,6 +1,6 @@
 "use strict";
 
-/* Cijene HR – javno sučelje.
+/* Cijene BoLaNI – javno sučelje.
  * Korisnik pretražuje proizvode (padajući izbornik), otvara usporedbu po
  * trgovcima i slaže popis za kupnju (donji desni kut). Popis se čuva samo u
  * njegovom pregledniku.
@@ -338,7 +338,7 @@ function groupText(g) {
 }
 
 function listText(plan) {
-  const parts = ["Popis za kupnju (Cijene HR)", ""];
+  const parts = ["Popis za kupnju (Cijene BoLaNI)", ""];
   for (const g of plan.groups) {
     parts.push(`${g.name.toUpperCase()} – ${eur(g.total)}`, ...g.items.map(itemLine), "");
   }
@@ -761,6 +761,8 @@ $("#panel").addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#panel").hidden) openPanel(false); });
 
 (async function init() {
+  // uži ekran (logo "Cijene BoLaNI" zauzme više mjesta): kraći natpis u polju za pretragu
+  if (window.innerWidth < 420) qEl.placeholder = window.innerWidth < 380 ? "Traži…" : "Proizvod ili barkod";
   renderFab();
   try { META = await data.meta(); CONFIG = META; FEATURE_LABELS = META.features || {}; } catch { META = null; }
   if (META?.updated) $("#updated").textContent = `Cijene od ${fmtDate(META.updated)}`;

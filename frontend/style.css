@@ -1,10 +1,10 @@
-/* Cijene HR – zelena kao "cijena je dobra", toplo narančasta za akcije.
+/* Cijene BoLaNI – zelena kao "cijena je dobra", toplo narančasta za akcije.
    Tipografija: sistemski sans, tabularne brojke za cijene. */
 :root {
   --bg: #f5f7f6; --surface: #ffffff; --text: #15191a; --muted: #5a6466; --line: #e1e6e4;
   --accent: #0b6e4f; --accent-soft: #e2f2eb; --on-accent: #ffffff;
   --deal: #c2410c; --deal-soft: #fdeee4; --bad: #b42318; --bad-soft: #fde8e7;
-  --card: #6d28d9; --card-soft: #f1eafe;
+  --card: #6d28d9; --card-soft: #f1eafe; --logo-red: #d0202a;
   --shadow: 0 10px 30px rgba(16, 40, 32, .14), 0 2px 6px rgba(16, 40, 32, .08);
   --radius: 12px;
 }
@@ -13,7 +13,7 @@
     --bg: #0f1312; --surface: #181e1c; --text: #e6ebe9; --muted: #98a4a0; --line: #28312e;
     --accent: #4cc39a; --accent-soft: #143028; --on-accent: #08160f;
     --deal: #fb923c; --deal-soft: #3a2416; --bad: #f97066; --bad-soft: #3b1d1b;
-    --card: #c4b5fd; --card-soft: #2a2140;
+    --card: #c4b5fd; --card-soft: #2a2140; --logo-red: #ff5a5f;
     --shadow: 0 10px 30px rgba(0, 0, 0, .5); color-scheme: dark;
   }
 }
@@ -21,7 +21,7 @@
   --bg: #0f1312; --surface: #181e1c; --text: #e6ebe9; --muted: #98a4a0; --line: #28312e;
   --accent: #4cc39a; --accent-soft: #143028; --on-accent: #08160f;
   --deal: #fb923c; --deal-soft: #3a2416; --bad: #f97066; --bad-soft: #3b1d1b;
-  --card: #c4b5fd; --card-soft: #2a2140;
+  --card: #c4b5fd; --card-soft: #2a2140; --logo-red: #ff5a5f;
   --shadow: 0 10px 30px rgba(0, 0, 0, .5); color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -57,7 +57,9 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .top { background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; }
 .top-inner { display: flex; gap: 14px; align-items: center; padding-block: 10px; }
 .logo { font-weight: 800; font-size: 20px; color: var(--text); letter-spacing: -.02em; white-space: nowrap; }
-.logo span { color: var(--accent); }
+/* "Cijene" i "Bo", "N" u boji teksta (crno; u tamnoj temi svijetlo), "La" i "I" crveno */
+.logo .lb { color: var(--text); }
+.logo .lr { color: var(--logo-red); }
 .logo:hover { text-decoration: none; }
 .search { position: relative; flex: 1; min-width: 0; }
 .s-icon { position: absolute; left: 12px; top: 50%; width: 18px; height: 18px; transform: translateY(-50%);
@@ -240,6 +242,7 @@ main { padding-block: 18px 120px; min-height: 60vh; }
 
 @media (max-width: 640px) {
   .logo { font-size: 18px; }
+  @media (max-width: 379px) { .logo { font-size: 16px; } .top-inner { gap: 8px; } }
   .top-inner { gap: 10px; }
   .hero h1 { font-size: 25px; }
   /* kompaktno: manje redove, pitanja u jednom retku, visina prema vidljivom dijelu (JS) */
