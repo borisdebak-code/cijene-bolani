@@ -18,6 +18,12 @@ HTML stranice proizvoda se ne scrapaju.
   niža cijena. **Napomena:** u studenom 2026. nijedan od podržanih cjenika ne sadrži datum
   trajanja akcije ni cijenu s karticom; parser ih prepoznaje čim se pojave (stupci
   "vrijedi do", "trajanje", "kartica", "MultiPlus"...)
+- kategorije kao u katalozima (struktura prema Konzumovom katalogu kategorija): početna
+  nudi glavne kategorije, zatim potkategorije, pa popis proizvoda s istim pitanjima za
+  sužavanje kao pretraga. Proizvodi se razvrstavaju po nazivu (`app/categories.py`), uz
+  grube kategorije iz cjenika kao ogradu; razvrstavanje je heurističko, pa pojedini
+  proizvodi mogu završiti krivo ili nigdje (i dalje se nalaze pretragom).
+  `python -m app.worker categorize` ponovno razvrstava sve proizvode.
 - usporedba po trgovcima: uobičajena cijena (medijan po poslovnicama, s akcijama), raspon, akcije
 - graf povijesti cijene
 - **popis za kupnju** (gumb u donjem desnom kutu): za svaki proizvod najjeftinija trgovina,

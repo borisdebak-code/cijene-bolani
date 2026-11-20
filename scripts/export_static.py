@@ -27,6 +27,7 @@ from sqlalchemy import text  # noqa: E402
 
 from app.api.routes import _qty_label  # noqa: E402
 from app.db import engine  # noqa: E402
+from app.categories import tree as category_tree  # noqa: E402
 from app.normalize import FEATURES, product_attrs, search_text  # noqa: E402
 
 FE = ROOT / "frontend"
@@ -84,10 +85,11 @@ def main() -> None:
             else:
                 pts.append([r.day.isoformat(), p, r.day.isoformat()])
         products = c.execute(text(
-            "SELECT id, name, brand, quantity, unit, ean, search_text FROM product WHERE id = ANY(:ids)"),
+            "SELECT id, name, brand, quantity, unit, ean, search_text, cat FROM product WHERE id = ANY(:ids)"),
             {"ids": list(by_product)}).all()
 
     items, shards, eans = [], defaultdict(dict), []
+    cat_counts: dict[str, int] = defaultdict(int)
     for p in products:
         cs = by_product[p.id]
         qty = _qty_label(p.quantity, p.unit)
@@ -99,8 +101,11 @@ def main() -> None:
         extra = " ".join(t for t in dict.fromkeys(p.search_text.split())
                          if t not in own and not (t.isdigit() and len(t) >= 8))
         pct, feat = product_attrs(p.name, p.brand)
+        cat = p.cat if p.cat and p.cat != "-" else None
         items.append([p.id, p.name, p.brand, qty, min(x[1] for x in cs), len(cs), extra or None,
-                      pct, ",".join(feat) or None])
+                      pct, ",".join(feat) or None, cat])
+        if cat:
+            cat_counts[cat] += 1
         h = {}
         for chain, pts in hist.get(p.id, {}).items():
             flat = []
@@ -120,6 +125,9 @@ def main() -> None:
     rest = [i for i in items if i[5] < 2]
     index = {"updated": updated.isoformat() if updated else None, "chains": chains,
              "features": {k: v[0] for k, v in FEATURES.items()},
+             "categories": [{**c, "subs": [{**sc, "count": cat_counts.get(sc["code"], 0)} for sc in c["subs"]],
+                             "count": sum(cat_counts.get(sc["code"], 0) for sc in c["subs"])}
+                            for c in category_tree()],
              "shards": args.shards, "items": core, "rest": "index-rest.json", "eans": "eans.json"}
     (out / "data" / "index.json").write_text(dump(index))
     (out / "data" / "index-rest.json").write_text(dump(rest))

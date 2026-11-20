@@ -94,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("schedule")
     sub.add_parser("list")
+    sub.add_parser("categorize", help="ponovno razvrstaj sve proizvode u kategorije")
     o = sub.add_parser("once")
     o.add_argument("--chains", help="zarezom odvojeni kodovi (default: svi zakazani)")
     o.add_argument("--date", type=date.fromisoformat)
@@ -109,6 +110,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     init_db()
+    if args.cmd == "categorize":
+        from .services.ingest import assign_categories
+
+        with SessionLocal() as s:
+            n = assign_categories(s, all_products=True)
+            s.commit()
+        print(f"razvrstano {n} proizvoda")
+        return 0
     if args.cmd == "schedule":
         schedule()
         return 0

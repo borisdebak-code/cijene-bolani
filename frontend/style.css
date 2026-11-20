@@ -141,6 +141,33 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .shop-pick select { font: inherit; font-size: 13px; color: var(--text); background: var(--bg);
   border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; max-width: 100%; }
 
+/* ---------- kategorije (kao u katalozima) */
+.cat-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 18px 0 24px; }
+.cat-tile {
+  display: flex; flex-direction: column; justify-content: space-between; gap: 6px; text-align: left;
+  min-height: 84px; padding: 14px; border-radius: var(--radius); background: var(--surface);
+  border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(16, 40, 32, .04);
+}
+.cat-tile:hover, .cat-tile:focus-visible { border-color: var(--accent); background: var(--accent-soft); }
+.ct-name { font-weight: 700; font-size: 15px; line-height: 1.25; text-wrap: balance; }
+.ct-count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cat-tile.all { border-style: dashed; }
+.cat-tile.all .ct-name { color: var(--accent); }
+.back-cat { color: var(--accent); font-weight: 600; padding: 6px 0; font-size: 15px; }
+.cat-title { margin-top: 4px; }
+.refine.page { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  margin: 14px 0 10px; max-height: none; overflow: visible; }
+.cat-list { list-style: none; margin: 0; padding: 4px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); }
+.cat-list li { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center;
+  padding: 9px 10px; border-radius: 8px; cursor: pointer; }
+.cat-list li + li { border-top: 1px solid var(--line); border-radius: 0; }
+.cat-list li[data-i]:hover { background: var(--accent-soft); }
+.cat-list li.none { display: block; cursor: default; }
+.add-to { margin-top: 10px; width: 100%; font-weight: 600; }
+.add-to.on { background: var(--accent-soft); border-color: var(--accent); }
+.tie-note { color: var(--accent); font-weight: 600; margin-top: 8px; }
+
 /* ---------- sadržaj */
 main { padding-block: 18px 120px; min-height: 60vh; }
 .back { display: inline-block; margin-bottom: 8px; }
@@ -254,9 +281,9 @@ main { padding-block: 18px 120px; min-height: 60vh; }
     max-height: 60vh; border-radius: 12px; }
   .sug-scroll { min-height: 96px; }
   .sug-list { padding: 4px 20px 4px 4px; }
-  .sug-list li { gap: 8px; padding: 6px 6px; }
+  .sug-list li { gap: 8px; padding: 5px 6px; }
   /* naziv u dva retka (u njemu su postotak i količina), bez dodatnog retka s markom */
-  .s-name { font-size: 14px; line-height: 1.25; white-space: normal;
+  .s-name { font-size: 13.5px; line-height: 1.22; white-space: normal;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .s-meta { display: none; }
   .s-price { font-size: 14px; }
@@ -273,6 +300,13 @@ main { padding-block: 18px 120px; min-height: 60vh; }
     padding-bottom: env(safe-area-inset-bottom, 0px); }
   .fab span:not(.fab-count) { display: none; }
   .p-head .primary { width: 100%; }
+  .cat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+  .cat-tile { min-height: 72px; padding: 11px 12px; }
+  .ct-name { font-size: 14px; }
+  .cat-list li { gap: 8px; padding: 7px 6px; }
+  .cat-list .s-name { font-size: 14px; line-height: 1.25; white-space: normal;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .cat-list .s-meta, .cat-list .s-chains { display: none; }
   .pick { place-items: end stretch; padding: 0; }
   .pick-box { width: 100%; border-radius: 16px 16px 0 0; padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
 }

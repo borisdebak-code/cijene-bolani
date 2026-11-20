@@ -156,3 +156,36 @@ def test_product_attrs(name, expected):
     from app.normalize import product_attrs
 
     assert product_attrs(name) == expected
+
+
+@pytest.mark.parametrize("name,brand,cats,expected", [
+    ("Dukat svježe mlijeko 3,2% mm 1,5 l PET", "Dukat", None, "mlijecni/mlijeko"),
+    ("Z bregov Kefir 3,5% 1 kg", None, None, "mlijecni/jogurti"),
+    ("Kiselo vrhnje 12%", None, None, "mlijecni/vrhnje"),
+    ("Jaja svježa M 10/1", None, None, "mlijecni/jaja"),
+    ("Boja za jaja ljubičasta", None, None, None),                 # nije hrana ni jaja
+    ("Banane", None, None, "voce/voce"),
+    ("Kindii vlažni t.p. 60 kom jagoda", None, "Toaletne potrepštine", None),
+    ("Fortia borovnica bazga 330 ml", "Z bregov", None, None),     # okus, ne svježe voće
+    ("Krumpir 2,5 kg", None, None, "voce/povrce"),
+    ("Heineken sv. pivo 5% 0,5 l limenka", None, None, "pica/pivo"),
+    ("Ledo Kineska mješavina 400 g", None, None, "zamrznuto/povrce"),  # ne "vina"
+    ("Slik začarana božićna noć forum", None, None, None),          # ne "rum"
+    ("Ariel deterdžent za rublje 40 pranja", None, None, "ciscenje/rublje"),
+    ("Jar deterdžent za suđe limun 900 ml", None, None, "ciscenje/posudje"),
+    ("Nutella 400g", "Nutella", None, "dorucak/cokonamazi"),
+    ("Barcaffe kava mljevena 500g", None, None, "dorucak/kava"),
+    ("Pedigree za pse dentastix", None, None, "ljubimci/psi"),
+    ("Nivea krema 250 ml", None, "KOZMETIKA", "higijena/kreme"),
+    ("Kalup za muffine 12/1", None, None, None),
+])
+def test_classify(name, brand, cats, expected):
+    from app.categories import classify
+
+    assert classify(name, brand, cats) == expected
+
+
+def test_classify_milk_not_cereal():
+    from app.categories import classify
+
+    assert classify("Lino Pillows jastu. s kremom Milk 700g") != "mlijecni/mlijeko"

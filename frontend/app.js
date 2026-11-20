@@ -46,11 +46,11 @@ async function getJSON(url) {
 const data = (() => {
   const summaries = new Map();
   let indexP = null, eansP = null;
-  let restLoaded = false;
+  let restLoaded = false, restP = null;
   const shards = new Map();
 
-  const expand = ([id, name, brand, qty, min, chains, extra, pct, feat]) => ({
-    id, name, brand, qty, min_price: min, chains, pct, feat: feat ? feat.split(",") : [],
+  const expand = ([id, name, brand, qty, min, chains, extra, pct, feat, cat]) => ({
+    id, name, brand, qty, min_price: min, chains, pct, feat: feat ? feat.split(",") : [], cat,
     hay: " " + norm(`${name} ${brand ?? ""} ${extra ?? ""}`) + " ",
     nm: " " + norm(name) + " ",
   });
@@ -60,7 +60,7 @@ const data = (() => {
       indexP = getJSON(STATIC.base + "index.json").then((ix) => {
         ix.items = ix.items.map(expand);
         // ostatak (proizvodi samo kod jednog trgovca) dolazi u pozadini
-        getJSON(STATIC.base + ix.rest).then((rest) => {
+        restP = getJSON(STATIC.base + ix.rest).then((rest) => {
           for (const r of rest) ix.items.push(expand(r));
           restLoaded = true;
           if (!$("#sug").hidden) updateSug();
@@ -103,6 +103,19 @@ const data = (() => {
       return out.sort((a, b) => b[0] - a[0]).slice(0, limit).map(([, it]) => it);
       // (rezultat ide u renderSug, koji iz njega slaže i pitanja za sužavanje)
     },
+    async categories() {
+      if (!STATIC) return getJSON("/api/categories");
+      return (await loadIndex()).categories || [];
+    },
+    // proizvodi u (pot)kategoriji, najprije oni koje ima više trgovaca
+    async browse(cat) {
+      if (!STATIC) return getJSON(`/api/browse?cat=${encodeURIComponent(cat)}&limit=2000`);
+      const ix = await loadIndex();
+      await restP;
+      const pre = cat + "/";
+      return ix.items.filter((it) => it.cat && (it.cat === cat || it.cat.startsWith(pre)))
+        .sort((a, b) => b.chains - a.chains || a.name.localeCompare(b.name, "hr"));
+    },
     async summary(id) {
       id = Number(id);
       if (summaries.has(id)) return summaries.get(id);
@@ -143,12 +156,12 @@ const basket = {
   save() {
     store.set("cijene.basket", this.items); renderFab();
     if (!$("#panel").hidden) renderPanel();
-    if (!$("#sug").hidden) markAdded();
+    markAdded();
   },
   find(id) { return this.items.find((i) => i.id === Number(id)); },
   add(p, n = 1, chain = null, chainName = null) {
     const it = this.find(p.id);
-    if (it) it.qty += n;
+    if (it) { it.qty += n; if (chain) it.chain = chain; }
     else this.items.push({ id: Number(p.id), qty: n, name: p.name,
       label: [p.brand && prettyBrand(p.brand), p.qty].filter(Boolean).join(" · "), ...(chain ? { chain } : {}) });
     this.save();
@@ -492,37 +505,62 @@ async function updateSug() {
 
 const LIST_MAX = 60;   // toliko redova se iscrtava; ostalo se dobiva sužavanjem izbora
 
+function refineHTML(facets, filters, total) {
+  const anySel = Object.values(filters).some((v) => v != null);
+  return `
+      <div class="r-head"><strong>${total} ${plural(parseInt(total, 10), "proizvod", "proizvoda", "proizvoda")}</strong>
+        <span class="muted">· suzi izbor</span>
+        ${anySel ? '<button class="link r-clear" data-clear="1">Poništi</button>' : ""}</div>
+      ${facets.map((f) => `<div class="q" role="group" aria-label="${esc(f.label)}" data-qkey="${f.key}">
+        <div class="q-label">${esc(f.label)}</div>
+        <div class="q-opts">${f.opts.map((o) => {
+          const on = filters[f.key] === o.value;
+          return `<button class="opt${on ? " on" : ""}" data-facet="${f.key}" data-val="${esc(o.value)}" aria-pressed="${on}">
+            ${esc(o.text)}${on ? ' <span aria-hidden="true">×</span>' : ` <span class="cnt">${o.count}</span>`}</button>`;
+        }).join("")}</div></div>`).join("")}`;
+}
+
+// nakon odabira opcije pitanja se iscrtaju ponovno – zadrži gdje je korisnik bio
+// (npr. pomaknuo je red do "1 l"), ne vraćaj na početak
+function keepScroll(container, render) {
+  const pos = {};
+  container.querySelectorAll("[data-qkey]").forEach((q) => { pos[q.dataset.qkey] = q.querySelector(".q-opts").scrollLeft; });
+  const top = container.scrollTop;
+  render();
+  container.querySelectorAll("[data-qkey]").forEach((q) => {
+    if (pos[q.dataset.qkey] != null) q.querySelector(".q-opts").scrollLeft = pos[q.dataset.qkey];
+  });
+  container.scrollTop = top;
+}
+
+function rowHTML(p, i, prefix = "sug") {
+  return `
+    <li role="option" id="${prefix}-${i}" data-i="${i}">
+      <div class="s-main"><div class="s-name">${esc(p.name)}</div>
+        <div class="muted small s-meta">${esc([p.brand && prettyBrand(p.brand), p.qty].filter(Boolean).join(" · "))}</div></div>
+      <div class="s-price"><strong>${p.min_price != null ? "od " + eur(p.min_price) : ""}</strong>
+        <div class="muted small s-chains">${shopsN(p.chains)}</div></div>
+      <button class="add" data-add="${i}" data-pid="${p.id}" aria-label="Dodaj na popis: ${esc(p.name)}" title="Dodaj na popis">+</button>
+    </li>`;
+}
+
 function renderSug() {
   const filtered = sugAll.filter((p) => matches(p, sugFilters));
   sugItems = filtered.slice(0, LIST_MAX); sugActive = -1;
   const facets = sugAll.length > 1 ? buildFacets(sugAll, sugFilters) : [];
   const anySel = Object.values(sugFilters).some((v) => v != null);
   const list = $("#sug-list");
-  list.innerHTML = sugItems.length ? sugItems.map((p, i) => `
-    <li role="option" id="sug-${i}" data-i="${i}">
-      <div class="s-main"><div class="s-name">${esc(p.name)}</div>
-        <div class="muted small s-meta">${esc([p.brand && prettyBrand(p.brand), p.qty].filter(Boolean).join(" · "))}</div></div>
-      <div class="s-price"><strong>${p.min_price != null ? "od " + eur(p.min_price) : ""}</strong>
-        <div class="muted small s-chains">${shopsN(p.chains)}</div></div>
-      <button class="add" data-add="${i}" data-pid="${p.id}" aria-label="Dodaj na popis: ${esc(p.name)}" title="Dodaj na popis">+</button>
-    </li>`).join("") + (filtered.length > LIST_MAX
+  const listChanged = list.dataset.sig !== sugQuery + JSON.stringify(sugFilters);
+  list.dataset.sig = sugQuery + JSON.stringify(sugFilters);
+  list.innerHTML = sugItems.length ? sugItems.map((p, i) => rowHTML(p, i)).join("") + (filtered.length > LIST_MAX
       ? `<li class="more muted small" role="presentation">i još ${filtered.length - LIST_MAX} – suzi izbor${facets.length ? " ispod" : " preciznijim upitom"}</li>` : "")
     : `<li class="none muted">Nema proizvoda za „${esc(qEl.value.trim())}”${anySel ? " uz odabrane uvjete" : ""}</li>`;
   const total = `${filtered.length}${sugAll.length >= MAX_CANDIDATES && !anySel ? "+" : ""}`;
-  $("#sug-refine").innerHTML = facets.length ? `
-      <div class="r-head"><strong>${total} ${plural(filtered.length, "proizvod", "proizvoda", "proizvoda")}</strong>
-        <span class="muted">· suzi izbor</span>
-        ${anySel ? '<button class="link r-clear" data-clear="1">Poništi</button>' : ""}</div>
-      ${facets.map((f) => `<div class="q" role="group" aria-label="${esc(f.label)}">
-        <div class="q-label">${esc(f.label)}</div>
-        <div class="q-opts">${f.opts.map((o) => {
-          const on = sugFilters[f.key] === o.value;
-          return `<button class="opt${on ? " on" : ""}" data-facet="${f.key}" data-val="${esc(o.value)}" aria-pressed="${on}">
-            ${esc(o.text)}${on ? ' <span aria-hidden="true">×</span>' : ` <span class="cnt">${o.count}</span>`}</button>`;
-        }).join("")}</div></div>`).join("")}` : "";
+  const ref = $("#sug-refine");
+  keepScroll(ref, () => { ref.innerHTML = facets.length ? refineHTML(facets, sugFilters, total) : ""; });
   $("#sug-refine").hidden = !facets.length;
   $("#sug").hidden = false;
-  list.scrollTop = 0;
+  if (listChanged) list.scrollTop = 0;
   qEl.setAttribute("aria-expanded", "true");
   fitSug();
   updateBar();
@@ -530,8 +568,9 @@ function renderSug() {
 }
 
 // proizvodi koji su već na popisu: "+" postaje kvačica s količinom (jasno je koji je dodan)
-function markAdded() {
-  for (const btn of $("#sug-list").querySelectorAll("[data-pid]")) {
+function markAdded(root) {
+  const roots = root ? [root] : [$("#sug-list"), $("#cat-list")].filter(Boolean);
+  for (const btn of roots.flatMap((r) => [...r.querySelectorAll("[data-pid]")])) {
     const it = basket.find(btn.dataset.pid);
     btn.classList.toggle("in", !!it);
     btn.innerHTML = it ? `<span aria-hidden="true">✓</span>${it.qty}` : "+";
@@ -579,15 +618,21 @@ function fitSug() {
   const vv = window.visualViewport;
   const vh = vv ? vv.height + vv.offsetTop : window.innerHeight;
   const top = box.getBoundingClientRect().top;
-  // na mobitelu najviše ~60 % ekrana, da se ispod vidi stranica; s tipkovnicom koliko ostane
-  const cap = window.innerWidth < 640 ? window.innerHeight * 0.6 : 820;
+  // mobitel: dok je polje aktivno, tipkovnica zauzme ~pola ekrana – izbornik ostaje iznad nje
+  // (i kad preglednik ne javi promjenu vidljivog dijela); bez tipkovnice najviše ~55 %
+  const mobile = window.innerWidth < 640;
+  const typing = mobile && document.activeElement === qEl;
+  const cap = mobile ? window.innerHeight * (typing ? 0.4 : 0.55) : 820;
   const maxH = Math.max(200, Math.min(cap, vh - top - 10));
-  box.style.maxHeight = `${maxH}px`;
+  box.style.maxHeight = `${Math.round(maxH)}px`;
   // pitanja najviše ~45 % izbornika, ostatak rezultati (postotak ne radi unutar flexa s max-height)
   $("#sug-refine").style.maxHeight = `${Math.round(maxH * 0.45)}px`;
   updateBar();
 }
 window.visualViewport?.addEventListener("resize", fitSug);
+window.visualViewport?.addEventListener("scroll", fitSug);
+qEl.addEventListener("blur", () => setTimeout(fitSug, 300));
+qEl.addEventListener("focus", () => setTimeout(fitSug, 300));
 window.addEventListener("resize", fitSug);
 
 function setActive(i) {
@@ -630,20 +675,104 @@ document.addEventListener("click", (e) => {
 $("#search-form").addEventListener("submit", (e) => e.preventDefault());
 
 // ===================================================================== views
-function renderHome(meta) {
-  const ex = ["mlijeko", "nutella", "kava", "jaja", "coca cola", "banane"];
+let CATS = null;
+async function categories() { if (!CATS) CATS = await data.categories(); return CATS; }
+
+async function renderHome(meta) {
   view.innerHTML = `
     <section class="hero">
       <h1>Gdje je najjeftinije?</h1>
-      <p class="muted">Upiši proizvod ili barkod gore, odaberi ga s popisa i usporedi cijene u trgovinama.
-        Dodaj proizvode na popis za kupnju i vidi gdje se koji isplati kupiti.</p>
-      <div class="chips">${ex.map((e) => `<button class="chip" data-q="${esc(e)}">${esc(e)}</button>`).join("")}</div>
-      ${meta?.updated ? `<p class="muted small">Cijene ažurirane: ${esc(fmtDate(meta.updated))}</p>` : ""}
-    </section>`;
-  view.querySelectorAll("[data-q]").forEach((b) => b.addEventListener("click", () => {
-    qEl.value = b.dataset.q; qEl.focus(); updateSug();
-  }));
+      <p class="muted">Upiši proizvod ili barkod gore, ili ga pronađi po kategorijama kao u katalogu.</p>
+    </section>
+    <div id="cats" class="cat-grid" aria-label="Kategorije"><p class="muted">Učitavam kategorije…</p></div>
+    ${meta?.updated ? `<p class="muted small">Cijene ažurirane: ${esc(fmtDate(meta.updated))}</p>` : ""}`;
+  let cats;
+  try { cats = await categories(); } catch { $("#cats").innerHTML = ""; return; }
+  if (!$("#cats")) return;
+  $("#cats").innerHTML = cats.filter((c) => c.count).map((c) => `
+    <button class="cat-tile" data-cat="${c.code}">
+      <span class="ct-name">${esc(c.name)}</span>
+      <span class="ct-count">${c.count.toLocaleString("hr-HR")} proizvoda</span>
+    </button>`).join("");
 }
+
+async function renderCategory(code) {
+  const cats = await categories();
+  const c = cats.find((x) => x.code === code);
+  if (!c) return renderHome(META);
+  view.innerHTML = `
+    <button class="back-cat" data-go="home">← Sve kategorije</button>
+    <h1 class="cat-title">${esc(c.name)}</h1>
+    <div class="cat-grid">
+      ${c.subs.filter((sc) => sc.count).map((sc) => `
+        <button class="cat-tile sub" data-cat="${sc.code}">
+          <span class="ct-name">${esc(sc.name)}</span>
+          <span class="ct-count">${sc.count.toLocaleString("hr-HR")} proizvoda</span>
+        </button>`).join("")}
+      <button class="cat-tile all" data-cat="${c.code}" data-all="1">
+        <span class="ct-name">Sve iz kategorije</span>
+        <span class="ct-count">${c.count.toLocaleString("hr-HR")} proizvoda</span>
+      </button>
+    </div>`;
+}
+
+// popis proizvoda u (pot)kategoriji, s istim pitanjima za sužavanje kao pretraga
+let listAll = [], listFilters = {}, listShown = 0, listItems = [];
+const LIST_PAGE = 40;
+
+async function renderCatList(code) {
+  const cats = await categories();
+  const [main] = code.split("/");
+  const c = cats.find((x) => x.code === main);
+  const sub = c?.subs.find((x) => x.code === code);
+  view.innerHTML = `
+    <button class="back-cat" data-catback="${main}">← ${esc(c ? c.name : "Kategorije")}</button>
+    <h1 class="cat-title">${esc(sub ? sub.name : c ? `${c.name} – sve` : "")}</h1>
+    <p class="muted">Učitavam…</p>`;
+  listAll = await data.browse(code);
+  listFilters = {}; listShown = LIST_PAGE;
+  view.innerHTML = `
+    <button class="back-cat" data-catback="${main}">← ${esc(c ? c.name : "Kategorije")}</button>
+    <h1 class="cat-title">${esc(sub ? sub.name : c ? `${c.name} – sve` : "")}</h1>
+    <div id="cat-refine" class="refine page"></div>
+    <ul id="cat-list" class="cat-list"></ul>
+    <p id="cat-more"></p>`;
+  drawCatList(true);
+}
+
+function drawCatList(first = false) {
+  const filtered = listAll.filter((p) => matches(p, listFilters));
+  listItems = filtered.slice(0, listShown);
+  const facets = listAll.length > 1 ? buildFacets(listAll, listFilters) : [];
+  const ref = $("#cat-refine");
+  keepScroll(ref, () => { ref.innerHTML = facets.length ? refineHTML(facets, listFilters, String(filtered.length)) : ""; });
+  ref.hidden = !facets.length;
+  $("#cat-list").innerHTML = listItems.map((p, i) => rowHTML(p, i, "cl")).join("")
+    || '<li class="none muted">Nema proizvoda uz odabrane uvjete.</li>';
+  $("#cat-more").innerHTML = filtered.length > listShown
+    ? `<button class="ghost" id="cat-more-btn">Prikaži još (${filtered.length - listShown})</button>` : "";
+  markAdded($("#cat-list"));
+}
+
+view.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-cat]");
+  if (t) return go({ cat: t.dataset.cat, list: t.dataset.cat.includes("/") || !!t.dataset.all });
+  const back = e.target.closest("[data-catback]");
+  if (back) return go({ cat: back.dataset.catback, list: false });
+  if (!$("#cat-list")) return;
+  const opt = e.target.closest("[data-facet]");
+  if (opt) {
+    const k = opt.dataset.facet, v = opt.dataset.val;
+    listFilters[k] = listFilters[k] === v ? null : v;
+    listShown = LIST_PAGE; return drawCatList();
+  }
+  if (e.target.closest("[data-clear]")) { listFilters = {}; return drawCatList(); }
+  if (e.target.id === "cat-more-btn") { listShown += LIST_PAGE * 2; return drawCatList(); }
+  const add = e.target.closest("#cat-list [data-add]");
+  if (add) return addToBasket(listItems[Number(add.dataset.add)]);
+  const li = e.target.closest("#cat-list li[data-i]");
+  if (li) go(listItems[Number(li.dataset.i)].id);
+});
 
 const fmtShort = (d) => new Date(d + "T12:00:00Z").toLocaleDateString("hr-HR", { day: "numeric", month: "numeric", year: "numeric" });
 
@@ -671,6 +800,7 @@ async function renderProduct(id) {
   try { s = await data.summary(id); } catch (e) { view.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
   const b = s.chains[0]?.price;
   const inList = basket.find(s.id);
+  const tied = new Set(tiedChains(s).map((c) => c.chain));
   view.innerHTML = `
     <div class="p-head">
       <div>
@@ -682,22 +812,32 @@ async function renderProduct(id) {
     <h2>Usporedba po trgovcima</h2>
     ${s.chains.length ? `<div class="chains">${s.chains.map((c, i) => {
       const diff = b ? ((c.price - b) / b) * 100 : 0;
-      return `<div class="chain-card ${i === 0 ? "best" : ""}">
+      const low = tied.has(c.chain);
+      const mine = inList && inList.chain === c.chain;
+      return `<div class="chain-card ${low ? "best" : ""}">
         <div class="cname"><span>${esc(c.chain_name)}</span>
-          ${i === 0 ? '<span class="badge">najjeftinije</span>' : `<span class="muted small">${diff < 0.5 ? "ista cijena" : `+${diff.toFixed(0)} %`}</span>`}</div>
+          ${low ? '<span class="badge">najjeftinije</span>' : `<span class="muted small">+${diff.toFixed(0)} %</span>`}</div>
         <div><span class="big">${eur(c.price)}</span>
           ${c.regular > c.price ? `<span class="old">${eur(c.regular)}</span>` : ""}</div>
         <div class="small muted">${c.deal_stores ? `<span class="badge deal">akcija</span> ` : ""}
           ${c.min < c.max ? `${eur(c.min)} – ${eur(c.max)} · ` : ""}${stores(c.stores)}</div>
         ${c.deal_stores ? `<div class="deal-line small">${esc(dealText(c))}</div>` : ""}
         ${cardLine(c.card_price, c.card_name)}
+        <button class="ghost sm add-to${mine ? " on" : ""}" data-add-chain="${esc(c.chain)}">
+          ${mine ? `✓ Na popisu (${inList.qty}) · još` : `+ Na popis za ${esc(c.chain_name)}`}</button>
       </div>`; }).join("")}</div>
+      ${tied.size > 1 ? `<p class="small tie-note">${tied.size} trgovine imaju istu najnižu cijenu – odaberi u koju želiš staviti proizvod.</p>` : ""}
       <p class="muted small">Prikazana je uobičajena cijena (medijan) u poslovnicama trgovca, uključujući akcije.</p>`
     : `<div class="empty">Ovaj proizvod trenutno nema cijenu ni u jednoj trgovini.</div>`}
     ${s.history.some((h) => h.points.length > 1) ? `
       <h2>Povijest cijene</h2>
       <div class="panel-box"><div class="chart-box"><canvas id="chart" aria-label="Graf povijesti cijene"></canvas></div></div>` : ""}`;
   $("#add-btn").addEventListener("click", async () => { await addToBasket(s); renderProduct(s.id); });
+  view.querySelectorAll("[data-add-chain]").forEach((btn) => btn.addEventListener("click", () => {
+    const c = s.chains.find((x) => x.chain === btn.dataset.addChain);
+    basket.add(s, 1, c.chain, c.chain_name);
+    renderProduct(s.id);
+  }));
   drawHistory(s.history);
 }
 
@@ -754,8 +894,10 @@ let current = null; const stack = [];
 let META = null;
 function go(id, push = true) { if (push) stack.push(current); current = id; window.scrollTo(0, 0); route(); }
 function route() {
-  $("#back").hidden = current == null;
+  // "← natrag" samo na stranici proizvoda; kategorije imaju svoj gumb za povratak
+  $("#back").hidden = typeof current !== "number";
   if (current == null) return renderHome(META);
+  if (typeof current === "object") return current.list ? renderCatList(current.cat) : renderCategory(current.cat);
   return renderProduct(current);
 }
 

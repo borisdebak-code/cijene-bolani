@@ -309,6 +309,22 @@ def ingest_batch(session: Session, sps: list[StorePrices], day: date) -> dict:
 
 # --------------------------------------------------------------------------- #
 
+def assign_categories(session: Session, all_products: bool = False) -> int:
+    """Razvrstaj proizvode u kategorije kao u katalozima (app.categories).
+    Po defaultu samo one koji još nemaju kategoriju."""
+    from ..categories import classify
+
+    rows = session.execute(text(
+        f"""SELECT p.id, p.name, p.brand, string_agg(DISTINCT cp.category, ', ') AS cats
+            FROM product p LEFT JOIN chain_product cp ON cp.product_id = p.id
+            {"" if all_products else "WHERE p.cat IS NULL"}
+            GROUP BY p.id""")).all()
+    updates = [{"id": r.id, "cat": classify(r.name, r.brand, r.cats) or "-"} for r in rows]
+    for i in range(0, len(updates), 5000):
+        session.execute(text("UPDATE product SET cat = :cat WHERE id = :id"), updates[i:i + 5000])
+    return len(updates)
+
+
 def refresh_daily(session: Session, chain_code: str, day: date) -> int:
     """Dnevni sažetak po proizvodu i trgovcu (medijan, min, max, broj
     poslovnica, akcije) – za graf povijesti i usporedbu bez skeniranja
@@ -471,6 +487,11 @@ def run_adapter(session_factory, adapter_code: str, day: date,
         with session_factory() as s:
             refresh_daily(s, chain, day)
             s.commit()
+    if chains_touched:
+        with session_factory() as s:
+            n = assign_categories(s)
+            s.commit()
+        clog.info("razvrstano u kategorije: %d novih proizvoda", n)
 
     level = logging.INFO if status == "ok" else logging.ERROR
     clog.log(level, "kraj: %s %s", status, stats)

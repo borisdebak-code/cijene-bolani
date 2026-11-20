@@ -57,6 +57,8 @@ class Product(Base):
     category: Mapped[str | None] = mapped_column(String(200))
     search_text: Mapped[str] = mapped_column(Text)
     match_name: Mapped[str] = mapped_column(Text)
+    #: kategorija kao u katalozima, "kategorija/potkategorija" (app.categories)
+    cat: Mapped[str | None] = mapped_column(String(40), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (

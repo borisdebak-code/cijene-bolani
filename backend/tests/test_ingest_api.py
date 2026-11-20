@@ -263,3 +263,15 @@ def test_api_suggest_returns_attrs_for_refinement(client):
     milk = next(r for r in res if r["ean"] == MLIJEKO)
     assert milk["pct"] == "m2.8" and "s" in milk["feat"]
     assert client.get("/api/config").json()["features"]["bl"] == "bez laktoze"
+
+
+def test_api_categories_and_browse(client, db_engine):
+    cats = {c["code"]: c for c in client.get("/api/categories").json()}
+    mlijecni = cats["mlijecni"]
+    assert mlijecni["name"] == "Mliječni proizvodi i jaja"
+    subs = {s["code"]: s["count"] for s in mlijecni["subs"]}
+    assert subs["mlijecni/mlijeko"] >= 1 and mlijecni["count"] == sum(subs.values())
+    milk = client.get("/api/browse", params={"cat": "mlijecni/mlijeko"}).json()
+    assert milk[0]["ean"] == MLIJEKO and milk[0]["chains"] == 6 and milk[0]["pct"] == "m2.8"
+    whole = client.get("/api/browse", params={"cat": "mlijecni"}).json()
+    assert {r["id"] for r in milk} <= {r["id"] for r in whole}

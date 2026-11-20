@@ -326,3 +326,51 @@ def config(db: Session = Depends(get_session)):
     return {"public": os.environ.get("PUBLIC_MODE", "").lower() in {"1", "true", "yes"},
             "updated": db.execute(text("SELECT max(last_day) FROM chain")).scalar(),
             "features": {k: v[0] for k, v in FEATURES.items()}}
+
+
+# --------------------------------------------------------------------------- #
+# Kategorije kao u katalozima
+# --------------------------------------------------------------------------- #
+
+_CURRENT = """JOIN LATERAL (
+            SELECT min(d.price_median) AS min_price, count(*) AS chains
+            FROM chain_daily d JOIN chain c ON c.id = d.chain_id AND d.day = c.last_day
+            WHERE d.product_id = pr.id
+        ) agg ON agg.chains > 0"""
+
+
+@router.get("/categories")
+def categories(db: Session = Depends(get_session)):
+    """Kategorije i potkategorije s brojem proizvoda koji trenutno imaju cijenu."""
+    from ..categories import tree
+
+    counts = dict(db.execute(text(
+        """SELECT pr.cat, count(*) FROM product pr
+           WHERE pr.cat IS NOT NULL AND pr.cat <> '-' AND EXISTS (
+               SELECT 1 FROM chain_daily d JOIN chain c ON c.id = d.chain_id AND d.day = c.last_day
+               WHERE d.product_id = pr.id)
+           GROUP BY pr.cat""")).all())
+    out = []
+    for c in tree():
+        subs = [{**sc, "count": counts.get(sc["code"], 0)} for sc in c["subs"]]
+        out.append({**c, "subs": subs, "count": sum(sc["count"] for sc in subs)})
+    return out
+
+
+@router.get("/browse")
+def browse(cat: str = Query(..., max_length=40), limit: int = Query(400, le=2000),
+           db: Session = Depends(get_session)):
+    """Proizvodi u (pot)kategoriji, najprije oni koje ima više trgovaca."""
+    where = "pr.cat = :cat" if "/" in cat else "pr.cat LIKE :cat || '/%'"
+    rows = db.execute(text(
+        f"""SELECT pr.id, pr.name, pr.brand, pr.quantity, pr.unit, pr.ean, pr.cat,
+                   agg.min_price, agg.chains
+            FROM product pr {_CURRENT}
+            WHERE {where}
+            ORDER BY agg.chains DESC, pr.name
+            LIMIT :limit"""), {"cat": cat, "limit": limit}).mappings().all()
+    out = []
+    for r in rows:
+        pct, feat = product_attrs(r["name"], r["brand"])
+        out.append({**dict(r), "qty": _qty_label(r["quantity"], r["unit"]), "pct": pct, "feat": feat})
+    return out
