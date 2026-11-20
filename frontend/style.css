@@ -100,6 +100,8 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
   color: var(--accent); font-size: 20px; line-height: 1; display: grid; place-items: center;
 }
 .add:hover { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.add.in { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-size: 13px;
+  font-weight: 700; font-variant-numeric: tabular-nums; gap: 1px; display: inline-flex; align-items: center; justify-content: center; }
 
 /* ---------- sužavanje izbora u padajućem izborniku */
 .sug li.more { display: block; cursor: default; padding: 6px 10px 8px; }
@@ -218,11 +220,22 @@ main { padding-block: 18px 120px; min-height: 60vh; }
 .one td { padding: 7px 4px; border-bottom: 1px solid var(--line); }
 .one td.num { text-align: right; font-weight: 600; }
 .one tr.win td { color: var(--accent); }
+.export { display: flex; gap: 8px; margin-top: 10px; }
+.export > * { flex: 1; justify-content: center; }
+.primary.sm { padding: 8px 12px; font-size: 14px; border-radius: 8px; }
+.export a, .shop-actions a { text-decoration: none; }
+.export svg, .shop-actions svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; }
+.export button, .export a, .shop-actions button, .shop-actions a { display: inline-flex; align-items: center; gap: 6px; }
+.wa { color: var(--accent); }
+.shop-actions { display: flex; gap: 6px; }
 .copy-fallback { width: 100%; height: 90px; margin-top: 6px; font: inherit; font-size: 12px; }
 .toast {
   position: fixed; z-index: 50; left: 50%; transform: translateX(-50%);
   bottom: calc(86px + env(safe-area-inset-bottom, 0px)); max-width: calc(100vw - 32px);
-  background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 99px; font-size: 14px; box-shadow: var(--shadow);
+  background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 12px; font-size: 14px; box-shadow: var(--shadow);
+  width: max-content; line-height: 1.3; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
 
 @media (max-width: 640px) {

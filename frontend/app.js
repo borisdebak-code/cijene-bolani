@@ -140,7 +140,11 @@ function expandSummary(id, s, chainNames) {
 // ===================================================================== basket
 const basket = {
   items: store.get("cijene.basket", []),   // [{id, qty, name, label, chain?}] – chain: korisnikov odabir trgovine
-  save() { store.set("cijene.basket", this.items); renderFab(); if (!$("#panel").hidden) renderPanel(); },
+  save() {
+    store.set("cijene.basket", this.items); renderFab();
+    if (!$("#panel").hidden) renderPanel();
+    if (!$("#sug").hidden) markAdded();
+  },
   find(id) { return this.items.find((i) => i.id === Number(id)); },
   add(p, n = 1, chain = null, chainName = null) {
     const it = this.find(p.id);
@@ -275,7 +279,10 @@ async function renderPanel() {
           <a href="#" data-go="${r.it.id}" class="nm">${esc(r.it.name)}</a>
           <span class="pr">${eur(r.best.price * r.it.qty)}</span></li>`).join("")}
         </ul>
-        <button class="ghost sm" data-copy="${esc(g.chain)}">Kopiraj popis za ${esc(g.name)}</button>
+        <div class="shop-actions">
+          <button class="ghost sm" data-copy="${esc(g.chain)}">${SHARE_ICON}Pošalji popis za ${esc(g.name)}</button>
+          <a class="ghost sm wa" href="${waLink(groupText(g))}" target="_blank" rel="noopener" aria-label="Pošalji popis za ${esc(g.name)} na WhatsApp">${WA_ICON}</a>
+        </div>
       </section>`).join("") + missing(plan);
   } else if (panelTab === "items") {
     body.innerHTML = `<ul class="items">${plan.rows.map((r) => `<li>
@@ -305,21 +312,66 @@ async function renderPanel() {
         <td class="small muted">${c.have === n ? "sve ima" : `nema ${n - c.have}`}</td></tr>`).join("")}</tbody></table>`;
   }
   const saving = plan.oneShop.find((c) => c.have === plan.priced);
+  const all = listText(plan);
   $("#panel-foot").innerHTML = `
     <div><span class="muted small">Ukupno, svaki proizvod gdje je najjeftiniji</span><strong>${eur(plan.total)}</strong></div>
-    ${saving && saving.total > plan.total + 0.005 ? `<div class="small muted">U jednoj trgovini najmanje ${eur(saving.total)} (${esc(saving.name)})</div>` : ""}`;
+    ${saving && saving.total > plan.total + 0.005 ? `<div class="small muted">U jednoj trgovini najmanje ${eur(saving.total)} (${esc(saving.name)})</div>` : ""}
+    <div class="export" role="group" aria-label="Pošalji popis">
+      <button class="primary sm" data-share="all">${SHARE_ICON}Podijeli</button>
+      <a class="ghost sm wa" href="${waLink(all)}" target="_blank" rel="noopener">${WA_ICON}WhatsApp</a>
+      <button class="ghost sm" data-copyall="1">Kopiraj</button>
+    </div>`;
+  $("#panel-foot [data-share]").onclick = () => shareText(all, "Popis za kupnju");
+  $("#panel-foot [data-copyall]").onclick = (e) => copyText(all, e.currentTarget, "Popis kopiran – zalijepi ga u Bilješke ili poruku");
 
   body.querySelectorAll("[data-copy]").forEach((b) => b.addEventListener("click", () => {
     const g = plan.groups.find((x) => x.chain === b.dataset.copy);
-    const txt = `${g.name} – popis za kupnju\n` + g.items.map((r) =>
-      `☐ ${r.it.qty}× ${r.it.name}${r.it.label ? ` (${r.it.label})` : ""} – ${eur(r.best.price * r.it.qty)}`).join("\n") +
-      `\nUkupno: ${eur(g.total)}`;
-    navigator.clipboard.writeText(txt).then(() => toast("Popis kopiran"), () => {
-      const ta = document.createElement("textarea"); ta.value = txt; ta.className = "copy-fallback";
-      b.after(ta); ta.select(); toast("Označeno – kopiraj ručno");
-    });
+    shareText(groupText(g), `${g.name} – popis za kupnju`, b);
   }));
 }
+
+// ---- tekst popisa za Bilješke / WhatsApp / poruku
+const itemLine = (r) => `☐ ${r.it.qty}× ${r.it.name}${r.it.label ? ` (${r.it.label})` : ""} – ${eur(r.best.price * r.it.qty)}`;
+
+function groupText(g) {
+  return `${g.name} – popis za kupnju\n${g.items.map(itemLine).join("\n")}\nUkupno: ${eur(g.total)}`;
+}
+
+function listText(plan) {
+  const parts = ["Popis za kupnju (Cijene HR)", ""];
+  for (const g of plan.groups) {
+    parts.push(`${g.name.toUpperCase()} – ${eur(g.total)}`, ...g.items.map(itemLine), "");
+  }
+  const miss = plan.rows.filter((r) => !r.best);
+  if (miss.length) parts.push("BEZ CIJENE", ...miss.map((r) => `☐ ${r.it.qty}× ${r.it.name}`), "");
+  parts.push(`Ukupno: ${eur(plan.total)}`);
+  if (META?.updated) parts.push(`Cijene od ${fmtDate(META.updated)}`);
+  return parts.join("\n");
+}
+
+const waLink = (text) => `https://wa.me/?text=${encodeURIComponent(text)}`;
+
+// Izbornik dijeljenja na mobitelu (Bilješke, WhatsApp, Viber, e-mail...). Gdje ga
+// preglednik ne nudi (npr. stranica ugrađena u drugu stranicu), popis se kopira.
+async function shareText(text, title, anchor) {
+  if (navigator.share) {
+    try { await navigator.share({ title, text }); return; }
+    catch (e) { if (e && e.name === "AbortError") return; }
+  }
+  copyText(text, anchor, "Dijeljenje ovdje nije dostupno – popis je kopiran, zalijepi ga u Bilješke ili poruku");
+}
+
+function copyText(text, anchor, msg) {
+  const fallback = () => {
+    const ta = document.createElement("textarea"); ta.value = text; ta.className = "copy-fallback"; ta.readOnly = true;
+    (anchor || $("#panel-foot")).after(ta); ta.focus(); ta.select();
+    toast("Označeno – kopiraj ručno (dugi pritisak → Kopiraj)");
+  };
+  try { navigator.clipboard.writeText(text).then(() => toast(msg || "Kopirano"), fallback); } catch { fallback(); }
+}
+
+const SHARE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0-4 4m4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>';
+const WA_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a8.5 8.5 0 0 1-12.6 7.4L3.5 20l1.1-3.8A8.5 8.5 0 1 1 20 11.5Z"/></svg>';
 
 function missing(plan) {
   const m = plan.rows.filter((r) => !r.best);
@@ -427,7 +479,7 @@ function renderSug() {
         <div class="muted small s-meta">${esc([p.brand && prettyBrand(p.brand), p.qty].filter(Boolean).join(" · "))}</div></div>
       <div class="s-price"><strong>${p.min_price != null ? "od " + eur(p.min_price) : ""}</strong>
         <div class="muted small s-chains">${shopsN(p.chains)}</div></div>
-      <button class="add" data-add="${i}" aria-label="Dodaj na popis: ${esc(p.name)}" title="Dodaj na popis">+</button>
+      <button class="add" data-add="${i}" data-pid="${p.id}" aria-label="Dodaj na popis: ${esc(p.name)}" title="Dodaj na popis">+</button>
     </li>`).join("") + (filtered.length > LIST_MAX
       ? `<li class="more muted small" role="presentation">i još ${filtered.length - LIST_MAX} – suzi izbor${facets.length ? " ispod" : " preciznijim upitom"}</li>` : "")
     : `<li class="none muted">Nema proizvoda za „${esc(qEl.value.trim())}”${anySel ? " uz odabrane uvjete" : ""}</li>`;
@@ -449,6 +501,17 @@ function renderSug() {
   qEl.setAttribute("aria-expanded", "true");
   fitSug();
   updateBar();
+  markAdded();
+}
+
+// proizvodi koji su već na popisu: "+" postaje kvačica s količinom (jasno je koji je dodan)
+function markAdded() {
+  for (const btn of $("#sug-list").querySelectorAll("[data-pid]")) {
+    const it = basket.find(btn.dataset.pid);
+    btn.classList.toggle("in", !!it);
+    btn.innerHTML = it ? `<span aria-hidden="true">✓</span>${it.qty}` : "+";
+    btn.title = it ? `Na popisu (${it.qty}) – dodaj još` : "Dodaj na popis";
+  }
 }
 
 // ---- vlastiti klizač uz rezultate (mobilni preglednici skrivaju standardnu traku)
