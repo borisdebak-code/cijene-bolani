@@ -41,29 +41,61 @@ def last_days() -> dict[str, date | None]:
         return dict(c.execute(text("SELECT code, last_day FROM chain")).all())
 
 
+def _download(url: str, dest: Path) -> None:
+    with httpx.stream("GET", url, headers=UA, timeout=900, follow_redirects=True) as resp:
+        resp.raise_for_status()
+        with open(dest, "wb") as f:
+            for chunk in resp.iter_bytes(1 << 20):
+                f.write(chunk)
+
+
 def refresh_cijenedev(summary: dict) -> None:
+    """Za svakog trgovca najnovija arhiva u kojoj on stvarno postoji.
+
+    Dnevna arhiva se puni tijekom dana – ujutro u današnjoj često još nema
+    nekih trgovaca (npr. Kauflanda i Lidla), pa ih uzimamo iz jučerašnje."""
+    import zipfile
+
     have = last_days()
-    have_min = min((have.get(c) for c in CDEV_CHAINS + ["interspar"] if have.get(c)), default=None)
     r = httpx.get(f"{CijeneDevAdapter.base_url}/v0/list", headers=UA, timeout=60)
     r.raise_for_status()
-    archives = sorted(r.json()["archives"], key=lambda a: a["date"], reverse=True)
-    latest = archives[0]
-    day = date.fromisoformat(latest["date"])
-    summary["cijenedev_latest"] = latest["date"]
-    if have_min and day <= have_min:
-        summary["cijenedev"] = f"bez promjene (baza već ima {have_min})"
-        return
-    with tempfile.TemporaryDirectory() as tmp:
-        zpath = Path(tmp) / "a.zip"
-        with httpx.stream("GET", latest["url"], headers=UA, timeout=900, follow_redirects=True) as resp:
-            resp.raise_for_status()
-            with open(zpath, "wb") as f:
-                for chunk in resp.iter_bytes(1 << 20):
-                    f.write(chunk)
-        adapter = CijeneDevAdapter(chains=CDEV_CHAINS)
-        files = adapter.prepare(zpath.name, zpath.read_bytes())
-        res = run_adapter(SessionLocal, "cijenedev", day, files=files, adapter=adapter)
-    summary["cijenedev"] = {k: res[k] for k in ("status", "stores", "rows_total", "error")} | {"day": str(day)}
+    archives = sorted(r.json()["archives"], key=lambda a: a["date"], reverse=True)[:4]
+    summary["cijenedev_latest"] = archives[0]["date"]
+    done: dict[str, str] = {}
+    pending = set(CDEV_CHAINS)
+    for a in archives:
+        day = date.fromisoformat(a["date"])
+
+        def newer(c: str) -> bool:
+            # spar puni i interspar – dovoljno je da je jedan od njih stariji
+            targets = [c, "interspar"] if c == "spar" else [c]
+            return any(have.get(t) is None or have[t] < day for t in targets)
+
+        want = sorted(c for c in pending if newer(c))
+        for c in sorted(pending - set(want)):              # već imamo ovaj ili noviji dan
+            done[c] = f"bez promjene (baza već ima {have.get(c)})"
+        pending -= {c for c in pending if c not in want}
+        if not want:
+            continue
+        with tempfile.TemporaryDirectory() as tmp:
+            zpath = Path(tmp) / "a.zip"
+            _download(a["url"], zpath)
+            with zipfile.ZipFile(zpath) as zf:
+                present = {n.split("/")[0] for n in zf.namelist() if n.endswith("/prices.csv")}
+            chains = [c for c in want if c in present]
+            if not chains:
+                continue
+            adapter = CijeneDevAdapter(chains=chains)
+            res = run_adapter(SessionLocal, "cijenedev", day, files=adapter.prepare(zpath.name, zpath.read_bytes()),
+                              adapter=adapter)
+        for c in chains:
+            done[c] = f"{day} ({res['status']})"
+        pending -= set(chains)
+        if not pending:
+            break
+    for c in pending:
+        done.setdefault(c, "bez promjene ili nije u zadnje 4 arhive")
+    summary["cijenedev"] = done
 
 
 def refresh_plodine(summary: dict) -> None:
