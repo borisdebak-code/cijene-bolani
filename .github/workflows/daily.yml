@@ -41,6 +41,8 @@ jobs:
           --shm-size=1g
     env:
       PGURL: postgresql://postgres:pg@localhost:5432/cijene
+      PGURL_INNER: postgresql://postgres:pg@localhost:5432/cijene   # unutar Postgres spremnika
+      PG_CONTAINER: ${{ job.services.postgres.id }}
       DATABASE_URL: postgresql+psycopg://postgres:pg@localhost:5432/cijene
       CIJENEDEV_CHAINS: konzum,lidl,kaufland,spar
       GH_TOKEN: ${{ github.token }}
