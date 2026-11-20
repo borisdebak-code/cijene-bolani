@@ -17,8 +17,14 @@
       <form id="search-form" class="search" role="search" autocomplete="off">
         <svg class="s-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
         <input id="q" type="search" placeholder="Traži proizvod ili barkod" aria-label="Pretraga proizvoda"
-               role="combobox" aria-autocomplete="list" aria-controls="sug" aria-expanded="false" enterkeyhint="search">
-        <ul id="sug" class="sug" role="listbox" hidden></ul>
+               role="combobox" aria-autocomplete="list" aria-controls="sug-list" aria-expanded="false" enterkeyhint="search">
+        <div id="sug" class="sug" hidden>
+          <div class="sug-scroll">
+            <ul id="sug-list" class="sug-list" role="listbox" aria-label="Rezultati pretrage"></ul>
+            <div class="sbar" aria-hidden="true"><div class="sthumb"></div></div>
+          </div>
+          <div id="sug-refine" class="refine"></div>
+        </div>
       </form>
     </div>
   </header>
@@ -50,6 +56,15 @@
     <div id="panel-body" class="panel-body"></div>
     <footer id="panel-foot" class="panel-foot"></footer>
   </aside>
+
+  <div id="pick" class="pick" hidden>
+    <div class="pick-box" role="dialog" aria-modal="true" aria-labelledby="pick-title">
+      <h2 id="pick-title">U koju trgovinu?</h2>
+      <p id="pick-sub" class="muted small"></p>
+      <div id="pick-opts" class="pick-opts"></div>
+      <button id="pick-later" class="link">Svejedno, odluči kasnije</button>
+    </div>
+  </div>
 
   <div id="toast" class="toast" role="status" hidden></div>
 </body>

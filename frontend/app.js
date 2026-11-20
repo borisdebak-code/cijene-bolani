@@ -139,15 +139,21 @@ function expandSummary(id, s, chainNames) {
 
 // ===================================================================== basket
 const basket = {
-  items: store.get("cijene.basket", []),   // [{id, qty, name, label}]
+  items: store.get("cijene.basket", []),   // [{id, qty, name, label, chain?}] – chain: korisnikov odabir trgovine
   save() { store.set("cijene.basket", this.items); renderFab(); if (!$("#panel").hidden) renderPanel(); },
   find(id) { return this.items.find((i) => i.id === Number(id)); },
-  add(p, n = 1) {
+  add(p, n = 1, chain = null, chainName = null) {
     const it = this.find(p.id);
     if (it) it.qty += n;
-    else this.items.push({ id: Number(p.id), qty: n, name: p.name, label: [p.brand, p.qty].filter(Boolean).join(" · ") });
+    else this.items.push({ id: Number(p.id), qty: n, name: p.name,
+      label: [p.brand && prettyBrand(p.brand), p.qty].filter(Boolean).join(" · "), ...(chain ? { chain } : {}) });
     this.save();
-    toast(`Dodano na popis: ${p.name}`);
+    toast(`Dodano na popis${chainName ? ` (${chainName})` : ""}: ${p.name}`);
+  },
+  setChain(id, chain) {
+    const it = this.find(id); if (!it) return;
+    if (chain) it.chain = chain; else delete it.chain;
+    this.save();
   },
   setQty(id, qty) {
     const it = this.find(id); if (!it) return;
@@ -163,6 +169,46 @@ function toast(msg) {
   clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, 2200);
 }
 
+// trgovci s istom najnižom cijenom (unutar pola centa)
+const tiedChains = (s) => {
+  if (!s.chains.length) return [];
+  const min = Math.min(...s.chains.map((c) => c.price));
+  return s.chains.filter((c) => c.price - min < 0.005).sort((a, b) => a.chain_name.localeCompare(b.chain_name, "hr"));
+};
+
+// Dodavanje na popis: ako više trgovina ima istu najnižu cijenu, korisnik bira trgovinu.
+async function addToBasket(p) {
+  if (basket.find(p.id)) return basket.add(p);
+  let s = null;
+  try { s = await data.summary(p.id); } catch { /* bez sažetka: dodaj bez izbora */ }
+  const ties = s ? tiedChains(s) : [];
+  if (ties.length < 2) return basket.add(p);
+  const choice = await pickShop(p, ties);
+  if (choice === undefined) return;                 // odustao
+  basket.add(p, 1, choice?.chain ?? null, choice?.chain_name ?? null);
+}
+
+let pickResolve = null;
+function pickShop(p, ties) {
+  $("#pick-title").textContent = `Ista najniža cijena u ${ties.length} ${plural(ties.length, "trgovini", "trgovine", "trgovina")}`;
+  $("#pick-sub").textContent = `${p.name} – ${eur(ties[0].price)}. U koju trgovinu ga staviti na popis?`;
+  $("#pick-opts").innerHTML = ties.map((c, i) => `
+    <button class="pick-opt" data-pick="${i}">
+      <span class="po-name">${esc(c.chain_name)}</span>
+      <span class="po-meta small muted">${c.deal_stores ? '<span class="badge deal">akcija</span> ' : ""}${stores(c.stores)}</span>
+      <strong class="po-price">${eur(c.price)}</strong>
+    </button>`).join("");
+  $("#pick").hidden = false;
+  $("#pick-opts button")?.focus();
+  return new Promise((resolve) => {
+    pickResolve = (v) => { $("#pick").hidden = true; pickResolve = null; resolve(v); };
+    $("#pick-opts").onclick = (e) => { const b = e.target.closest("[data-pick]"); if (b) pickResolve(ties[Number(b.dataset.pick)]); };
+  });
+}
+$("#pick-later").addEventListener("click", () => pickResolve?.(null));
+$("#pick").addEventListener("click", (e) => { if (e.target.id === "pick") pickResolve?.(undefined); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && pickResolve) pickResolve(undefined); }, true);
+
 // najjeftiniji trgovac za proizvod (po uobičajenoj cijeni, pa po najnižoj)
 const best = (s) => s.chains.slice().sort((a, b) => a.price - b.price || a.min - b.min)[0];
 
@@ -175,8 +221,11 @@ async function basketPlan() {
   let total = 0;
   for (const r of rows) {
     if (!r.s || !r.s.chains.length) continue;
-    const b = best(r.s);
+    // korisnik je odabrao trgovinu (npr. kod iste najniže cijene) – poštuj odabir
+    const picked = r.it.chain && r.s.chains.find((c) => c.chain === r.it.chain);
+    const b = picked || best(r.s);
     r.best = b;
+    r.picked = !!picked;
     const withCard = r.s.chains.filter((c) => c.card_price != null && c.card_price < b.price)
       .sort((x, y) => x.card_price - y.card_price)[0];
     r.card = withCard || null;
@@ -233,7 +282,12 @@ async function renderPanel() {
         <div class="it-main">
           <a href="#" data-go="${r.it.id}" class="nm">${esc(r.it.name)}</a>
           <div class="muted small">${esc(r.it.label || "")}</div>
-          <div class="small">${r.best ? `Najjeftinije: <strong>${esc(r.best.chain_name)}</strong> ${eur(r.best.price)}` : '<span class="muted">Trenutno nema cijene</span>'}</div>
+          ${r.best ? `<label class="small shop-pick">Trgovina:
+            <select data-chain-for="${r.it.id}" aria-label="Trgovina za ${esc(r.it.name)}">
+              <option value="">najjeftinija (${esc(best(r.s).chain_name)})</option>
+              ${r.s.chains.slice().sort((a, b) => a.price - b.price).map((c) =>
+                `<option value="${esc(c.chain)}"${r.picked && c.chain === r.it.chain ? " selected" : ""}>${esc(c.chain_name)} – ${eur(c.price)}</option>`).join("")}
+            </select></label>` : '<div class="small muted">Trenutno nema cijene</div>'}
           ${r.card ? cardLine(r.card.card_price, r.card.card_name, r.card.chain_name) : ""}
         </div>
         <div class="stepper" role="group" aria-label="Količina">
@@ -285,8 +339,6 @@ function openPanel(open) {
 let sugTimer = null, sugSeq = 0, sugItems = [], sugActive = -1;
 let sugQuery = "", sugAll = [], sugFilters = {};
 const MAX_CANDIDATES = 400;
-// na mobitelu manje rezultata, da se pitanja za sužavanje vide bez pomicanja
-const show = () => (window.innerWidth < 640 ? 3 : 6);
 let FEATURE_LABELS = {};
 
 function closeSug() { $("#sug").hidden = true; sugActive = -1; qEl.setAttribute("aria-expanded", "false"); }
@@ -361,43 +413,97 @@ async function updateSug() {
   renderSug();
 }
 
+const LIST_MAX = 60;   // toliko redova se iscrtava; ostalo se dobiva sužavanjem izbora
+
 function renderSug() {
   const filtered = sugAll.filter((p) => matches(p, sugFilters));
-  const SHOW = show();
-  sugItems = filtered.slice(0, SHOW); sugActive = -1;
+  sugItems = filtered.slice(0, LIST_MAX); sugActive = -1;
   const facets = sugAll.length > 1 ? buildFacets(sugAll, sugFilters) : [];
   const anySel = Object.values(sugFilters).some((v) => v != null);
-  const box = $("#sug");
-  const rows = sugItems.map((p, i) => `
+  const list = $("#sug-list");
+  list.innerHTML = sugItems.length ? sugItems.map((p, i) => `
     <li role="option" id="sug-${i}" data-i="${i}">
       <div class="s-main"><div class="s-name">${esc(p.name)}</div>
-        <div class="muted small">${esc([p.brand && prettyBrand(p.brand), p.qty].filter(Boolean).join(" · "))}</div></div>
+        <div class="muted small s-meta">${esc([p.brand && prettyBrand(p.brand), p.qty].filter(Boolean).join(" · "))}</div></div>
       <div class="s-price"><strong>${p.min_price != null ? "od " + eur(p.min_price) : ""}</strong>
-        <div class="muted small">${shopsN(p.chains)}</div></div>
+        <div class="muted small s-chains">${shopsN(p.chains)}</div></div>
       <button class="add" data-add="${i}" aria-label="Dodaj na popis: ${esc(p.name)}" title="Dodaj na popis">+</button>
-    </li>`).join("");
-  const refine = facets.length ? `
-    <li class="refine" role="presentation">
-      <div class="r-head"><strong>${filtered.length}${sugAll.length >= MAX_CANDIDATES && !anySel ? "+" : ""} ${plural(filtered.length, "proizvod", "proizvoda", "proizvoda")}</strong>
+    </li>`).join("") + (filtered.length > LIST_MAX
+      ? `<li class="more muted small" role="presentation">i još ${filtered.length - LIST_MAX} – suzi izbor${facets.length ? " ispod" : " preciznijim upitom"}</li>` : "")
+    : `<li class="none muted">Nema proizvoda za „${esc(qEl.value.trim())}”${anySel ? " uz odabrane uvjete" : ""}</li>`;
+  const total = `${filtered.length}${sugAll.length >= MAX_CANDIDATES && !anySel ? "+" : ""}`;
+  $("#sug-refine").innerHTML = facets.length ? `
+      <div class="r-head"><strong>${total} ${plural(filtered.length, "proizvod", "proizvoda", "proizvoda")}</strong>
         <span class="muted">· suzi izbor</span>
-        ${anySel ? '<button class="link r-clear" data-clear="1">Poništi odabir</button>' : ""}</div>
+        ${anySel ? '<button class="link r-clear" data-clear="1">Poništi</button>' : ""}</div>
       ${facets.map((f) => `<div class="q" role="group" aria-label="${esc(f.label)}">
         <div class="q-label">${esc(f.label)}</div>
         <div class="q-opts">${f.opts.map((o) => {
           const on = sugFilters[f.key] === o.value;
           return `<button class="opt${on ? " on" : ""}" data-facet="${f.key}" data-val="${esc(o.value)}" aria-pressed="${on}">
             ${esc(o.text)}${on ? ' <span aria-hidden="true">×</span>' : ` <span class="cnt">${o.count}</span>`}</button>`;
-        }).join("")}</div></div>`).join("")}
-    </li>` : "";
-  box.innerHTML = (rows || `<li class="none muted">Nema proizvoda za „${esc(qEl.value.trim())}”${anySel ? " uz odabrane uvjete" : ""}</li>`)
-    + (filtered.length > SHOW ? `<li class="more muted small" role="presentation">i još ${filtered.length - SHOW} – suzi izbor ispod</li>` : "")
-    + refine;
-  box.hidden = false;
+        }).join("")}</div></div>`).join("")}` : "";
+  $("#sug-refine").hidden = !facets.length;
+  $("#sug").hidden = false;
+  list.scrollTop = 0;
   qEl.setAttribute("aria-expanded", "true");
+  fitSug();
+  updateBar();
 }
 
+// ---- vlastiti klizač uz rezultate (mobilni preglednici skrivaju standardnu traku)
+const sbar = $(".sbar"), sthumb = $(".sthumb");
+function updateBar() {
+  const l = $("#sug-list");
+  const max = l.scrollHeight - l.clientHeight;
+  sbar.hidden = max <= 2;
+  if (max <= 2) return;
+  const track = sbar.clientHeight;
+  const h = Math.max(32, track * l.clientHeight / l.scrollHeight);
+  sthumb.style.height = `${h}px`;
+  sthumb.style.transform = `translateY(${(l.scrollTop / max) * (track - h)}px)`;
+}
+function barScrollTo(clientY, grabOffset) {
+  const l = $("#sug-list"), r = sbar.getBoundingClientRect();
+  const h = sthumb.offsetHeight;
+  const ratio = Math.min(1, Math.max(0, (clientY - r.top - grabOffset) / (r.height - h)));
+  l.scrollTop = ratio * (l.scrollHeight - l.clientHeight);
+}
+let grab = null;
+sbar.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  const t = sthumb.getBoundingClientRect();
+  grab = e.target === sthumb ? e.clientY - t.top : sthumb.offsetHeight / 2;
+  sbar.setPointerCapture(e.pointerId);
+  sbar.classList.add("drag");
+  barScrollTo(e.clientY, grab);
+});
+sbar.addEventListener("pointermove", (e) => { if (grab != null) barScrollTo(e.clientY, grab); });
+const endGrab = () => { grab = null; sbar.classList.remove("drag"); };
+sbar.addEventListener("pointerup", endGrab);
+sbar.addEventListener("pointercancel", endGrab);
+$("#sug-list").addEventListener("scroll", updateBar, { passive: true });
+
+// visina izbornika prema vidljivom dijelu ekrana (na mobitelu tipkovnica zauzme pola)
+function fitSug() {
+  const box = $("#sug");
+  if (box.hidden) return;
+  const vv = window.visualViewport;
+  const vh = vv ? vv.height + vv.offsetTop : window.innerHeight;
+  const top = box.getBoundingClientRect().top;
+  // na mobitelu najviše ~60 % ekrana, da se ispod vidi stranica; s tipkovnicom koliko ostane
+  const cap = window.innerWidth < 640 ? window.innerHeight * 0.6 : 820;
+  const maxH = Math.max(200, Math.min(cap, vh - top - 10));
+  box.style.maxHeight = `${maxH}px`;
+  // pitanja najviše ~45 % izbornika, ostatak rezultati (postotak ne radi unutar flexa s max-height)
+  $("#sug-refine").style.maxHeight = `${Math.round(maxH * 0.45)}px`;
+  updateBar();
+}
+window.visualViewport?.addEventListener("resize", fitSug);
+window.addEventListener("resize", fitSug);
+
 function setActive(i) {
-  const lis = [...$("#sug").querySelectorAll("li[data-i]")];
+  const lis = [...$("#sug-list").querySelectorAll("li[data-i]")];
   if (!lis.length) return;
   sugActive = (i + lis.length) % lis.length;
   lis.forEach((li, k) => li.classList.toggle("active", k === sugActive));
@@ -425,13 +531,13 @@ $("#sug").addEventListener("click", (e) => {
   }
   if (e.target.closest("[data-clear]")) { sugFilters = {}; return renderSug(); }
   const add = e.target.closest("[data-add]");
-  if (add) { basket.add(sugItems[Number(add.dataset.add)]); return; }
+  if (add) { addToBasket(sugItems[Number(add.dataset.add)]); return; }
   const li = e.target.closest("li[data-i]");
   if (li) choose(sugItems[Number(li.dataset.i)]);
 });
 // composedPath: kliknuti gumb (npr. opcija za sužavanje) može već biti zamijenjen novim HTML-om
 document.addEventListener("click", (e) => {
-  if (!e.composedPath().some((el) => el.classList?.contains("search"))) closeSug();
+  if (!e.composedPath().some((el) => el.classList?.contains("search") || el.id === "pick")) closeSug();
 });
 $("#search-form").addEventListener("submit", (e) => e.preventDefault());
 
@@ -503,7 +609,7 @@ async function renderProduct(id) {
     ${s.history.some((h) => h.points.length > 1) ? `
       <h2>Povijest cijene</h2>
       <div class="panel-box"><div class="chart-box"><canvas id="chart" aria-label="Graf povijesti cijene"></canvas></div></div>` : ""}`;
-  $("#add-btn").addEventListener("click", () => { basket.add(s); renderProduct(s.id); });
+  $("#add-btn").addEventListener("click", async () => { await addToBasket(s); renderProduct(s.id); });
   drawHistory(s.history);
 }
 
@@ -577,6 +683,10 @@ document.addEventListener("click", (e) => {
 });
 $("#fab").addEventListener("click", () => openPanel($("#panel").hidden));
 $("#panel-close").addEventListener("click", () => openPanel(false));
+$("#panel").addEventListener("change", (e) => {
+  const sel = e.target.closest("[data-chain-for]");
+  if (sel) basket.setChain(sel.dataset.chainFor, sel.value);
+});
 $("#panel").addEventListener("click", (e) => {
   const t = e.target.closest("[data-tab]");
   if (t) { panelTab = t.dataset.tab; store.set("cijene.tab", panelTab); return renderPanel(); }
