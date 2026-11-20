@@ -161,16 +161,38 @@ const basket = {
   },
   setQty(id, qty) {
     const it = this.find(id); if (!it) return;
-    if (qty <= 0) this.items = this.items.filter((i) => i !== it); else it.qty = qty;
+    if (qty <= 0) return this.remove(id);
+    it.qty = qty;
     this.save();
   },
-  clear() { this.items = []; this.save(); },
+  // uklanjanje se uvijek može poništiti ("Vrati") – lako je slučajno dodirnuti
+  remove(id) {
+    const idx = this.items.findIndex((i) => i.id === Number(id));
+    if (idx < 0) return;
+    const [it] = this.items.splice(idx, 1);
+    this.save();
+    toast(`Uklonjeno: ${it.name}`, "Vrati", () => {
+      if (!this.find(it.id)) this.items.splice(Math.min(idx, this.items.length), 0, it);
+      this.save();
+    });
+  },
+  clear() {
+    const before = this.items;
+    if (!before.length) return;
+    this.items = []; this.save();
+    toast(`Popis je ispražnjen (${before.length} ${plural(before.length, "proizvod", "proizvoda", "proizvoda")})`, "Vrati", () => {
+      this.items = before; this.save();
+    });
+  },
 };
 
-function toast(msg) {
+function toast(msg, actionLabel, action) {
   const t = $("#toast");
-  t.textContent = msg; t.hidden = false;
-  clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, 2200);
+  t.innerHTML = `<span class="t-msg"></span>${actionLabel ? `<button class="t-act">${esc(actionLabel)}</button>` : ""}`;
+  t.querySelector(".t-msg").textContent = msg;
+  if (actionLabel) t.querySelector(".t-act").onclick = () => { t.hidden = true; action(); };
+  t.hidden = false;
+  clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, actionLabel ? 6000 : 2200);
 }
 
 // trgovci s istom najnižom cijenom (unutar pola centa)
@@ -277,7 +299,8 @@ async function renderPanel() {
         <ul>${g.items.map((r) => `<li>
           <span class="q">${r.it.qty}×</span>
           <a href="#" data-go="${r.it.id}" class="nm">${esc(r.it.name)}</a>
-          <span class="pr">${eur(r.best.price * r.it.qty)}</span></li>`).join("")}
+          <span class="pr">${eur(r.best.price * r.it.qty)}</span>
+          <button class="rm" data-rm="${r.it.id}" aria-label="Ukloni s popisa: ${esc(r.it.name)}" title="Ukloni s popisa">${TRASH_ICON}</button></li>`).join("")}
         </ul>
         <div class="shop-actions">
           <button class="ghost sm" data-copy="${esc(g.chain)}">${SHARE_ICON}Pošalji popis za ${esc(g.name)}</button>
@@ -301,6 +324,7 @@ async function renderPanel() {
           <button class="ghost sm" data-dec="${r.it.id}" aria-label="Manje">−</button>
           <span>${r.it.qty}</span>
           <button class="ghost sm" data-inc="${r.it.id}" aria-label="Više">+</button>
+          <button class="rm" data-rm="${r.it.id}" aria-label="Ukloni s popisa: ${esc(r.it.name)}" title="Ukloni s popisa">${TRASH_ICON}</button>
         </div></li>`).join("")}</ul>
       <button class="link danger" id="clear">Isprazni popis</button>`;
   } else {
@@ -370,13 +394,14 @@ function copyText(text, anchor, msg) {
   try { navigator.clipboard.writeText(text).then(() => toast(msg || "Kopirano"), fallback); } catch { fallback(); }
 }
 
+const TRASH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4.5h6V7m-8 0 1 12.5a1.5 1.5 0 0 0 1.5 1.5h5a1.5 1.5 0 0 0 1.5-1.5L17 7M10 11v6m4-6v6"/></svg>';
 const SHARE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0-4 4m4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>';
 const WA_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a8.5 8.5 0 0 1-12.6 7.4L3.5 20l1.1-3.8A8.5 8.5 0 1 1 20 11.5Z"/></svg>';
 
 function missing(plan) {
   const m = plan.rows.filter((r) => !r.best);
   return m.length ? `<section class="shop muted"><header><h3>Bez cijene</h3></header><ul>${m.map((r) =>
-    `<li><span class="q">${r.it.qty}×</span><span class="nm">${esc(r.it.name)}</span></li>`).join("")}</ul></section>` : "";
+    `<li><span class="q">${r.it.qty}×</span><span class="nm">${esc(r.it.name)}</span><span></span><button class="rm" data-rm="${r.it.id}" aria-label="Ukloni s popisa: ${esc(r.it.name)}" title="Ukloni s popisa">${TRASH_ICON}</button></li>`).join("")}</ul></section>` : "";
 }
 
 function openPanel(open) {
@@ -757,6 +782,8 @@ $("#panel").addEventListener("click", (e) => {
   if (inc) basket.setQty(inc.dataset.inc, basket.find(inc.dataset.inc).qty + 1);
   if (dec) basket.setQty(dec.dataset.dec, basket.find(dec.dataset.dec).qty - 1);
   if (e.target.id === "clear") basket.clear();
+  const rm = e.target.closest("[data-rm]");
+  if (rm) basket.remove(rm.dataset.rm);
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#panel").hidden) openPanel(false); });
 

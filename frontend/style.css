@@ -209,7 +209,10 @@ main { padding-block: 18px 120px; min-height: 60vh; }
 .shop h3 { margin: 0 0 6px; font-size: 15px; }
 .shop .sum { font-weight: 700; font-variant-numeric: tabular-nums; }
 .shop ul { list-style: none; margin: 0 0 8px; padding: 0; }
-.shop li { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; padding: 3px 0; font-size: 14px; }
+.shop li { display: grid; grid-template-columns: auto 1fr auto auto; gap: 8px; align-items: center; padding: 3px 0; font-size: 14px; }
+.rm { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: var(--muted); flex: none; }
+.rm svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.rm:hover, .rm:focus-visible { color: var(--bad); background: var(--bad-soft); }
 .shop .q { color: var(--muted); font-variant-numeric: tabular-nums; }
 .shop .pr { font-variant-numeric: tabular-nums; }
 .nm { color: var(--text); min-width: 0; }
@@ -236,9 +239,10 @@ main { padding-block: 18px 120px; min-height: 60vh; }
   position: fixed; z-index: 50; left: 50%; transform: translateX(-50%);
   bottom: calc(86px + env(safe-area-inset-bottom, 0px)); max-width: calc(100vw - 32px);
   background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 12px; font-size: 14px; box-shadow: var(--shadow);
-  width: max-content; line-height: 1.3; overflow: hidden;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  width: max-content; line-height: 1.3; display: flex; align-items: center; gap: 14px;
 }
+.t-msg { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; min-width: 0; }
+.t-act { flex: none; color: var(--bg); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; padding: 4px 2px; }
 
 @media (max-width: 640px) {
   .logo { font-size: 18px; }
