@@ -39,6 +39,15 @@ def money(v):
     return None if v is None else round(float(v), 2)
 
 
+def own_brands(excl: dict, total: dict, share: float = 0.8) -> dict[str, str]:
+    out = {}
+    for b, per in excl.items():
+        chain, n = max(per.items(), key=lambda kv: kv[1])
+        if n >= share * total[b]:
+            out[b] = chain
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("out", type=Path)
@@ -48,9 +57,10 @@ def main() -> None:
     args = ap.parse_args()
 
     out: Path = args.out
-    (out / "data" / "p").mkdir(parents=True, exist_ok=True)
-    for old in (out / "data" / "p").glob("*.json"):
-        old.unlink()
+    for sub in ("p", "c"):
+        (out / "data" / sub).mkdir(parents=True, exist_ok=True)
+        for old in (out / "data" / sub).glob("*.json"):
+            old.unlink()
 
     with engine.connect() as c:
         chains = {r.code: r.name for r in c.execute(text("SELECT code, name FROM chain"))}
@@ -90,6 +100,10 @@ def main() -> None:
             {"ids": list(by_product)}).all()
 
     items, shards, eans = [], defaultdict(dict), []
+    by_chain: dict[str, list] = defaultdict(list)       # trgovina -> [[id, cijena]]
+    # marka -> {trgovac (spar = spar + interspar) -> broj artikala samo kod njega}, ukupno artikala
+    brand_excl: dict[str, dict] = defaultdict(lambda: defaultdict(int))
+    brand_total: dict[str, int] = defaultdict(int)
     cat_counts: dict[str, int] = defaultdict(int)
     for p in products:
         cs = by_product[p.id]
@@ -103,6 +117,14 @@ def main() -> None:
                          if t not in own and not (t.isdigit() and len(t) >= 8))
         pct, feat = product_attrs(p.name, p.brand)
         cat = p.cat if p.cat and p.cat != "-" else None
+        for x in cs:
+            by_chain[x[0]].append([p.id, x[1]])
+        if p.brand:
+            b = p.brand.strip().lower()
+            groups = {"spar" if x[0] == "interspar" else x[0] for x in cs}
+            brand_total[b] += 1
+            if len(groups) == 1:
+                brand_excl[b][next(iter(groups))] += 1
         items.append([p.id, p.name, p.brand, qty, min(x[1] for x in cs), len(cs), extra or None,
                       pct, ",".join(feat) or None, cat])
         if cat:
@@ -129,10 +151,16 @@ def main() -> None:
              "categories": [{**c, "subs": [{**sc, "count": cat_counts.get(sc["code"], 0)} for sc in c["subs"]],
                              "count": sum(cat_counts.get(sc["code"], 0) for sc in c["subs"])}
                             for c in category_tree()],
-             "shards": args.shards, "items": core, "rest": "index-rest.json", "eans": "eans.json"}
+             "shards": args.shards, "items": core,
+             # vlastite marke: marka koju prodaje samo jedan trgovac (najčešće njegova robna marka)
+             # (≥ 80 % artikala marke samo kod jednog trgovca – pokoji krivo spojen artikl ne smeta)
+             "own": own_brands(brand_excl, brand_total),
+             "chain_items": {c: len(v) for c, v in by_chain.items()}, "rest": "index-rest.json", "eans": "eans.json"}
     (out / "data" / "index.json").write_text(dump(index))
     (out / "data" / "index-rest.json").write_text(dump(rest))
     (out / "data" / "eans.json").write_text(dump(eans))
+    for code, rows in by_chain.items():
+        (out / "data" / "c" / f"{code}.json").write_text(dump(rows))
     for k in range(args.shards):
         (out / "data" / "p" / f"{k}.json").write_text(
             json.dumps(shards.get(k, {}), ensure_ascii=False, separators=(",", ":")))
