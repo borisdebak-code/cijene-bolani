@@ -249,6 +249,9 @@ def ingest_batch(session: Session, sps: list[StorePrices], day: date) -> dict:
                   s.lowest_30d, s.anchor_price, s.sale_type, s.valid_until, s.card_price,
                   s.card_name
            FROM stg s JOIN stgp g USING (code)"""))
+    # bez indeksa planer (zastarjela statistika price nakon INSERT-a) zna odabrati
+    # nested loop sa sekvencijalnim prolazom kroz stp – kod 400k redaka to su sati
+    session.execute(text("CREATE INDEX ON stp (store_id, cp_id)"))
     session.execute(text("ANALYZE stp"))
     same = """(p.regular_price, p.special_price, p.unit_price, p.lowest_30d, p.anchor_price,
                p.valid_until, p.card_price)
@@ -280,6 +283,7 @@ def ingest_batch(session: Session, sps: list[StorePrices], day: date) -> dict:
                           AND p.store_id = s.store_id AND p.chain_product_id = s.cp_id)
         """), p).rowcount
 
+    session.execute(text("ANALYZE price"))
     # ponovni unos istog dana (npr. trgovac je ispravio cjenik):
     #  - zapis nastao danas smije se ispraviti u cijelosti (nema povijesti koju bi prepisao)
     #  - produženom ranijem zapisu mijenjaju se samo opisna polja akcije
