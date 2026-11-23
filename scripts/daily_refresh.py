@@ -77,7 +77,11 @@ def refresh_cijenedev(summary: dict) -> None:
     summary["cijenedev_latest"] = archives[0]["date"]
     done: dict[str, str] = {}
     pending: set[str] | None = set(CDEV_CHAINS) if CDEV_CHAINS else None
-    for a in archives:
+    all_mode = pending is None
+    # "all": i trgovci koji u (ujutro još nepotpunoj) najnovijoj arhivi nedostaju,
+    # pa se gleda barem i jučerašnja
+    min_archives = 2 if all_mode else 1
+    for n_arch, a in enumerate(archives, 1):
         day = date.fromisoformat(a["date"])
 
         def newer(c: str) -> bool:
@@ -89,7 +93,7 @@ def refresh_cijenedev(summary: dict) -> None:
             for c in sorted(c for c in pending if not newer(c)):
                 done[c] = f"bez promjene (baza već ima {have.get(c)})"
             pending = {c for c in pending if newer(c)}
-            if not pending:
+            if not pending and n_arch > min_archives:
                 break
         with tempfile.TemporaryDirectory() as tmp:
             zpath = Path(tmp) / "a.zip"
@@ -98,11 +102,12 @@ def refresh_cijenedev(summary: dict) -> None:
                 present = {n.split("/")[0] for n in zf.namelist() if n.endswith("/prices.csv")}
                 counts = {c: zf.read(f"{c}/stores.csv").decode("utf-8-sig").strip().count("\n")
                           for c in present if f"{c}/stores.csv" in zf.namelist()}
-            if pending is None:
-                # "all": svi trgovci iz najnovije arhive + oni koje već imamo (da se dopune iz starijih)
+            if all_mode:
+                # svi trgovci iz arhive + oni koje već imamo (da se dopune iz starijih)
                 in_db = {c for c in have if c not in DIRECT and c != "interspar"}
-                pending = {c for c in (present | in_db) if c not in DIRECT and newer(c)}
-                for c in sorted((present | in_db) - DIRECT - {"interspar"} - pending):
+                cand = (present | in_db) - DIRECT - {"interspar"} - set(done)
+                pending = (pending or set()) | {c for c in cand if newer(c)}
+                for c in sorted(cand - pending):
                     done[c] = f"bez promjene (baza već ima {have.get(c)})"
 
             def complete(c: str) -> bool:
@@ -120,7 +125,7 @@ def refresh_cijenedev(summary: dict) -> None:
         for c in chains:
             done[c] = f"{day} ({res['status']})"
         pending -= set(chains)
-        if not pending:
+        if not pending and n_arch >= min_archives:
             break
     for c in pending or ():
         done.setdefault(c, "nije u zadnje 4 potpune arhive")
