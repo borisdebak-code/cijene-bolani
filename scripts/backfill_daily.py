@@ -43,6 +43,8 @@ def process(zpath: Path, day: date, chains: list[str]) -> int:
         chain_ids = {r.code: r.id for r in c.execute(text("SELECT id, code FROM chain"))}
     rows_out = []
     with zipfile.ZipFile(zpath) as zf:
+        if chains == ["all"]:
+            chains = sorted({n.split("/")[0] for n in zf.namelist() if n.endswith("/prices.csv")} - {"plodine"})
         for chain in chains:
             try:
                 stores = {s["store_id"]: s for s in csv.DictReader(io.StringIO(
@@ -103,7 +105,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--until", type=date.fromisoformat, default=date.today() - timedelta(days=1))
-    ap.add_argument("--chains", default="konzum,lidl,kaufland,spar")
+    ap.add_argument("--chains", default="all",
+                    help='zarezom odvojeni trgovci ili "all" (svi iz arhive osim Plodina)')
     args = ap.parse_args()
     chains = args.chains.split(",")
     avail = archives()

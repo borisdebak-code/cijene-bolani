@@ -43,7 +43,7 @@ jobs:
       PGURL: postgresql://postgres:pg@localhost:5432/cijene
       PGURL_INNER: postgresql://postgres:pg@localhost:5432/cijene   # unutar Postgres spremnika
       DATABASE_URL: postgresql+psycopg://postgres:pg@localhost:5432/cijene
-      CIJENEDEV_CHAINS: konzum,lidl,kaufland,spar
+      CIJENEDEV_CHAINS: all   # svi trgovci iz cijene.dev arhive (Plodine izravno)
       GH_TOKEN: ${{ github.token }}
       LOG_LEVEL: WARNING
       TZ: Europe/Zagreb

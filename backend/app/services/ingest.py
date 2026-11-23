@@ -33,7 +33,10 @@ CHAIN_NAMES = {
     "interspar": "Interspar", "plodine": "Plodine", "tommy": "Tommy", "studenac": "Studenac",
     "eurospin": "Eurospin", "ktc": "KTC", "ntl": "NTL", "ribola": "Ribola", "metro": "Metro",
     "dm": "dm", "boso": "Boso", "trgovina_krk": "Trgovina Krk", "trgovina-krk": "Trgovina Krk",
-    "zabac": "Žabac", "vrutak": "Vrutak", "lorenco": "Lorenco",
+    "zabac": "Žabac", "vrutak": "Vrutak", "lorenco": "Lorenco", "trgocentar": "Trgocentar",
+    "brodokomerc": "Brodokomerc", "jadranka_trgovina": "Jadranka trgovina", "gavranovic": "Gavranović",
+    "branka": "Branka", "djelo_vodice": "Djelo Vodice", "bure": "Bure", "dukat": "Dukat",
+    "stanic": "Diskont Stanić", "stridon": "Stridon", "roto": "Roto",
 }
 
 RAW_ARCHIVE_DIR = os.environ.get("RAW_ARCHIVE_DIR")

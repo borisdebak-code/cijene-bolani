@@ -32,7 +32,12 @@ from app.db import SessionLocal, engine, init_db  # noqa: E402
 from app.logging_setup import setup_logging  # noqa: E402
 from app.services.ingest import run_adapter  # noqa: E402
 
-CDEV_CHAINS = ["konzum", "lidl", "kaufland", "spar"]
+import os  # noqa: E402
+
+# Trgovci iz cijene.dev arhive: "all" = svi u arhivi osim onih koje preuzimamo izravno
+CDEV_CHAINS = [c for c in os.environ.get("CIJENEDEV_CHAINS", "all").split(",") if c and c != "all"]
+DIRECT = {"plodine"}                 # izravni adapter, ne iz arhive
+MIN_STORE_SHARE = 0.5                # arhiva s < 50 % uobičajenih poslovnica (npr. nedjelja) se preskače
 UA = {"User-Agent": "cijene-hr/0.1 (+price comparison; official price lists)"}
 
 
@@ -49,20 +54,29 @@ def _download(url: str, dest: Path) -> None:
                 f.write(chunk)
 
 
-def refresh_cijenedev(summary: dict) -> None:
-    """Za svakog trgovca najnovija arhiva u kojoj on stvarno postoji.
+def _store_counts() -> dict[str, int]:
+    with engine.connect() as c:
+        return dict(c.execute(text(
+            "SELECT ch.code, count(s.id) FROM chain ch JOIN store s ON s.chain_id = ch.id GROUP BY ch.code")).all())
 
-    Dnevna arhiva se puni tijekom dana – ujutro u današnjoj često još nema
-    nekih trgovaca (npr. Kauflanda i Lidla), pa ih uzimamo iz jučerašnje."""
+
+def refresh_cijenedev(summary: dict) -> None:
+    """Za svakog trgovca najnovija *potpuna* arhiva u kojoj postoji.
+
+    - dnevna arhiva se puni tijekom dana, pa ujutro u današnjoj nekih trgovaca još nema
+    - nedjeljom radi samo dio poslovnica (npr. Kaufland 1 od 54) – takav dan se preskače,
+      inače bi "trenutna" cijena bila iz jedne poslovnice
+    """
     import zipfile
 
     have = last_days()
+    known_stores = _store_counts()
     r = httpx.get(f"{CijeneDevAdapter.base_url}/v0/list", headers=UA, timeout=60)
     r.raise_for_status()
     archives = sorted(r.json()["archives"], key=lambda a: a["date"], reverse=True)[:4]
     summary["cijenedev_latest"] = archives[0]["date"]
     done: dict[str, str] = {}
-    pending = set(CDEV_CHAINS)
+    pending: set[str] | None = set(CDEV_CHAINS) if CDEV_CHAINS else None
     for a in archives:
         day = date.fromisoformat(a["date"])
 
@@ -71,18 +85,33 @@ def refresh_cijenedev(summary: dict) -> None:
             targets = [c, "interspar"] if c == "spar" else [c]
             return any(have.get(t) is None or have[t] < day for t in targets)
 
-        want = sorted(c for c in pending if newer(c))
-        for c in sorted(pending - set(want)):              # već imamo ovaj ili noviji dan
-            done[c] = f"bez promjene (baza već ima {have.get(c)})"
-        pending -= {c for c in pending if c not in want}
-        if not want:
-            continue
+        if pending is not None:
+            for c in sorted(c for c in pending if not newer(c)):
+                done[c] = f"bez promjene (baza već ima {have.get(c)})"
+            pending = {c for c in pending if newer(c)}
+            if not pending:
+                break
         with tempfile.TemporaryDirectory() as tmp:
             zpath = Path(tmp) / "a.zip"
             _download(a["url"], zpath)
             with zipfile.ZipFile(zpath) as zf:
                 present = {n.split("/")[0] for n in zf.namelist() if n.endswith("/prices.csv")}
-            chains = [c for c in want if c in present]
+                counts = {c: zf.read(f"{c}/stores.csv").decode("utf-8-sig").strip().count("\n")
+                          for c in present if f"{c}/stores.csv" in zf.namelist()}
+            if pending is None:
+                # "all": svi trgovci iz najnovije arhive + oni koje već imamo (da se dopune iz starijih)
+                in_db = {c for c in have if c not in DIRECT and c != "interspar"}
+                pending = {c for c in (present | in_db) if c not in DIRECT and newer(c)}
+                for c in sorted((present | in_db) - DIRECT - {"interspar"} - pending):
+                    done[c] = f"bez promjene (baza već ima {have.get(c)})"
+
+            def complete(c: str) -> bool:
+                usual = known_stores.get(c, 0) + (known_stores.get("interspar", 0) if c == "spar" else 0)
+                return usual < 10 or counts.get(c, 0) >= usual * MIN_STORE_SHARE
+
+            chains = sorted(c for c in pending if c in present and newer(c) and complete(c))
+            for c in sorted(c for c in pending if c in present and not complete(c)):
+                summary.setdefault("preskoceno", []).append(f"{c} {day}: samo {counts.get(c)} poslovnica")
             if not chains:
                 continue
             adapter = CijeneDevAdapter(chains=chains)
@@ -93,8 +122,8 @@ def refresh_cijenedev(summary: dict) -> None:
         pending -= set(chains)
         if not pending:
             break
-    for c in pending:
-        done.setdefault(c, "bez promjene ili nije u zadnje 4 arhive")
+    for c in pending or ():
+        done.setdefault(c, "nije u zadnje 4 potpune arhive")
     summary["cijenedev"] = done
 
 

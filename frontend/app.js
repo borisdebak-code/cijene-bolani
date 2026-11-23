@@ -847,7 +847,8 @@ async function renderProduct(id) {
       const diff = b ? ((c.price - b) / b) * 100 : 0;
       const low = tied.has(c.chain);
       const mine = inList && inList.chain === c.chain;
-      return `<div class="chain-card ${low ? "best" : ""}">
+      const extra = i >= CARDS_SHOWN && !low && !mine;
+      return `<div class="chain-card ${low ? "best" : ""}${extra ? " extra" : ""}"${extra ? " hidden" : ""}>
         <div class="cname"><span>${esc(c.chain_name)}</span>
           ${low ? '<span class="badge">najjeftinije</span>' : `<span class="muted small">+${diff.toFixed(0)} %</span>`}</div>
         <div><span class="big">${eur(c.price)}</span>
@@ -859,26 +860,38 @@ async function renderProduct(id) {
         <button class="ghost sm add-to${mine ? " on" : ""}" data-add-chain="${esc(c.chain)}">
           ${mine ? `✓ Na popisu (${inList.qty}) · još` : `+ Na popis za ${esc(c.chain_name)}`}</button>
       </div>`; }).join("")}</div>
-      ${tied.size > 1 ? `<p class="small tie-note">${tied.size} trgovine imaju istu najnižu cijenu – odaberi u koju želiš staviti proizvod.</p>` : ""}
+      ${s.chains.length > CARDS_SHOWN ? `<button class="ghost show-all" id="show-all">Prikaži sve trgovce (${s.chains.length})</button>` : ""}
+      ${tied.size > 1 ? `<p class="small tie-note">Ista najniža cijena u ${shopsN(tied.size)} – odaberi u koju želiš staviti proizvod.</p>` : ""}
       <p class="muted small">Prikazana je uobičajena cijena (medijan) u poslovnicama trgovca, uključujući akcije.</p>`
     : `<div class="empty">Ovaj proizvod trenutno nema cijenu ni u jednoj trgovini.</div>`}
     ${s.history.some((h) => h.points.length > 1) ? `
       <h2>Povijest cijene</h2>
-      <div class="panel-box"><div class="chart-box"><canvas id="chart" aria-label="Graf povijesti cijene"></canvas></div></div>` : ""}`;
+      <div class="panel-box"><div class="chart-box"><canvas id="chart" aria-label="Graf povijesti cijene"></canvas></div>
+        ${s.history.length > CHART_SHOWN ? `<p class="small muted">Prikazano je ${CHART_SHOWN} najjeftinijih trgovaca – ostale uključi dodirom na naziv u legendi.</p>` : ""}</div>` : ""}`;
   $("#add-btn").addEventListener("click", async () => { await addToBasket(s); renderProduct(s.id); });
+  $("#show-all")?.addEventListener("click", (e) => {
+    view.querySelectorAll(".chain-card.extra").forEach((el) => { el.hidden = false; });
+    e.currentTarget.remove();
+  });
   view.querySelectorAll("[data-add-chain]").forEach((btn) => btn.addEventListener("click", () => {
     const c = s.chains.find((x) => x.chain === btn.dataset.addChain);
     basket.add(s, 1, c.chain, c.chain_name);
     renderProduct(s.id);
   }));
-  drawHistory(s.history);
+  drawHistory(s.history, s.chains);
 }
 
-const PALETTE = ["#0b6e4f", "#d1495b", "#2e86de", "#c98a12", "#7b5ea7", "#00798c", "#8d6a4f", "#e07a5f"];
+const PALETTE = ["#0b6e4f", "#d1495b", "#2e86de", "#c98a12", "#7b5ea7", "#00798c", "#8d6a4f", "#e07a5f",
+  "#3d5a80", "#9c6644", "#6a994e", "#bc4749", "#5e60ce", "#f4a259", "#2a9d8f", "#b5838d"];
+const colorFor = (i) => PALETTE[i] || `hsl(${(i * 137.5) % 360} 55% 45%)`;
+const CHART_SHOWN = 6;
+const CARDS_SHOWN = 8;   // kartice trgovaca na stranici proizvoda (najjeftiniji), ostali na "Prikaži sve"   // s puno trgovaca graf prikazuje najjeftinije, ostali su u legendi
 
-function drawHistory(series) {
+function drawHistory(series, current = []) {
   const canvas = $("#chart");
   if (!canvas || !window.Chart) return;
+  const shown = new Set(current.slice().sort((a, b) => a.price - b.price).slice(0, CHART_SHOWN).map((c) => c.chain));
+  if (!shown.size) series.slice(0, CHART_SHOWN).forEach((s) => shown.add(s.chain));
   const known = [...new Set(series.flatMap((s) => s.points.map((p) => p.day)))].sort();
   if (!known.length) return;
   // svaki dan u rasponu, da vremenska os bude ravnomjerna
@@ -902,8 +915,8 @@ function drawHistory(series) {
           if (d in m) prev = m[d];
           return d >= first && d <= last ? prev : null;
         });
-        const color = PALETTE[i % PALETTE.length];
-        return { label: s.chain_name, data: vals, borderColor: color,
+        const color = colorFor(i);
+        return { label: s.chain_name, data: vals, borderColor: color, hidden: !shown.has(s.chain),
           backgroundColor: color, stepped: true, pointRadius: 0, pointHitRadius: 8, borderWidth: 2 };
       }),
     },

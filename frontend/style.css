@@ -171,6 +171,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .cat-list li.none { display: block; cursor: default; }
 .add-to { margin-top: 10px; width: 100%; font-weight: 600; }
 .add-to.on { background: var(--accent-soft); border-color: var(--accent); }
+.show-all { margin-top: 10px; width: 100%; }
 .tie-note { color: var(--accent); font-weight: 600; margin-top: 8px; }
 
 /* ---------- sadržaj */
